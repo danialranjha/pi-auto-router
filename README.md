@@ -26,10 +26,27 @@ Unlike a simple model switcher, `auto-router` can retry the **same request** acr
 pi install git:github.com/danialranjha/pi-auto-router
 ```
 
-Then reload pi:
+### Update
+
+To update to the latest version from GitHub:
+
+```bash
+pi update git:github.com/danialranjha/pi-auto-router
+```
+
+Alternatively, if you are developing locally:
+
+```bash
+cd /path/to/pi-auto-router
+git pull
+npm install
+npm run build
+```
+
+Then reload the extension inside pi:
 
 ```text
-/reload
+/auto-router reload
 ```
 
 ### Try without installing
