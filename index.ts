@@ -111,7 +111,7 @@ function parseModelSpec(spec: string): { provider: string; modelId: string } | n
 }
 
 function getRouteName(modelId: string): string {
-  return modelId.replace(/^subscription-/, "");
+  return String(modelId ?? "").replace(/^subscription-/, "");
 }
 
 function prettyRouteName(routeId: string): string {
@@ -134,8 +134,9 @@ function getAccessToken(authProvider: string): string | undefined {
   return entry.access;
 }
 
-function getTargetKey(target: RouteTarget): string {
-  return `${target.provider}/${target.modelId}`;
+function getTargetKey(target: RouteTarget | undefined | null): string {
+  if (!target) return "unknown/unknown";
+  return `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
 }
 
 function validateRouteTarget(target: unknown): target is RouteTarget {
@@ -246,8 +247,9 @@ function getPrimaryModelLimits(route: RouteDefinition): { contextWindow: number;
   return { contextWindow: 200000, maxTokens: 128000 };
 }
 
-function isRetryableError(message: string): boolean {
-  const text = message.toLowerCase();
+function isRetryableError(message: any): boolean {
+  const text = String(message ?? "").toLowerCase();
+  if (!text) return false;
   return [
     "429", "rate limit", "ratelimit", "too many requests", "overloaded", "overload", "capacity",
     "temporarily unavailable", "timeout", "timed out", "econnreset", "etimedout", "network", "connection",
@@ -258,8 +260,8 @@ function isRetryableError(message: string): boolean {
   ].some((needle) => text.includes(needle));
 }
 
-function getCooldownMs(message: string): number {
-  const text = message.toLowerCase();
+function getCooldownMs(message: any): number {
+  const text = String(message ?? "").toLowerCase();
   if (text.includes("429") || text.includes("rate limit") || text.includes("too many requests")) return 2 * 60_000;
   if (text.includes("overloaded") || text.includes("capacity") || text.includes("503")) return 5 * 60_000;
   return 90_000;
@@ -272,6 +274,7 @@ function putOnCooldown(target: RouteTarget, reason: string) {
 function getHealthyTargets(routeId: string): RouteTarget[] {
   const now = Date.now();
   return (routesCache[routeId]?.targets ?? []).filter((target) => {
+    if (!target) return false;
     const token = target.authProvider ? getAccessToken(target.authProvider) : "builtin";
     if (!token) return false;
     const cooldown = cooldowns.get(getTargetKey(target));
@@ -353,9 +356,10 @@ async function tryTarget(
 
     if (isRealContent) {
       if (event.type === "text_delta") {
-        if (isRetryableError(event.text)) {
-          putOnCooldown(target, event.text);
-          return { success: false, retryableFailure: `${target.label}: ${event.text}` };
+        const deltaText = (event as any).text ?? (event as any).delta ?? "";
+        if (isRetryableError(deltaText)) {
+          putOnCooldown(target, deltaText);
+          return { success: false, retryableFailure: `${target.label}: ${deltaText}` };
         }
       }
       sawSubstantive = true;
@@ -368,30 +372,30 @@ async function tryTarget(
     }
 
     if (event.type === "error") {
-      const message = event.error.errorMessage || `${target.label}: unknown error`;
+      const message = event.error?.errorMessage || `${target.label || "Target"}: unknown error`;
       if (!sawSubstantive && isRetryableError(message)) {
         putOnCooldown(target, message);
-        return { success: false, retryableFailure: `${target.label}: ${message}` };
+        return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
       }
       flush();
       outer.push({
         ...event,
         error: {
-          ...event.error,
+          ...(event.error || {}),
           provider: outerModel.provider,
           model: outerModel.id,
-          errorMessage: `${target.label}: ${message}`
+          errorMessage: `${target.label || "Target"}: ${message}`
         }
       });
       return {
         success: false,
         terminalError: {
-          ...event.error,
+          ...(event.error || {}),
           provider: outerModel.provider,
           model: outerModel.id,
-          errorMessage: `${target.label}: ${message}`
+          errorMessage: `${target.label || "Target"}: ${message}`
         }
-      };
+      } as any;
     }
 
     if (flushed) {
@@ -408,7 +412,7 @@ async function tryTarget(
     const message = lastMessage.errorMessage || "Unknown terminal error";
     if (!sawSubstantive && isRetryableError(message)) {
       putOnCooldown(target, message);
-      return { success: false, retryableFailure: `${target.label}: ${message}` };
+      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
     }
     return {
       success: false,
@@ -416,7 +420,7 @@ async function tryTarget(
         ...lastMessage,
         provider: outerModel.provider,
         model: outerModel.id,
-        errorMessage: `${target.label}: ${message}`
+        errorMessage: `${target.label || "Target"}: ${message}`
       }
     };
   }
@@ -469,7 +473,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 
 function getStatusLine(routeId?: string): string {
   if (!routeId || !(routeId in routesCache)) return "auto-router idle";
-  const healthy = getHealthyTargets(routeId).map((target) => target.label);
+  const healthy = getHealthyTargets(routeId).map((target) => String(target?.label ?? "Unknown"));
   const current = lastAttemptByRoute.get(routeId);
   const active = current ? `last: ${current}` : "no calls yet";
   return `auto-router ${getRouteName(routeId)} | ${active} | healthy: ${healthy.join(", ") || "none"} | ${formatCooldowns(routeId)}`;
@@ -479,13 +483,14 @@ function routeSummary(routeId: string): string {
   const route = routesCache[routeId];
   if (!route) return `Unknown route: ${routeId}`;
   const healthySet = new Set(getHealthyTargets(routeId).map(getTargetKey));
-  const lines = route.targets.map((target, index) => {
+  const lines = (route.targets || []).map((target, index) => {
+    if (!target) return `${index + 1}. [Invalid Target]`;
     const key = getTargetKey(target);
     const cooldown = cooldowns.get(key);
     const cooldownText = cooldown && cooldown.until > Date.now() ? ` | cooldown ${Math.max(1, Math.ceil((cooldown.until - Date.now()) / 60_000))}m` : "";
     const authText = target.authProvider ? `auth=${target.authProvider}` : "auth=builtin";
     const healthText = healthySet.has(key) ? "healthy" : "unavailable";
-    return `${index + 1}. ${target.label} [${target.provider}/${target.modelId}] | ${authText} | ${healthText}${cooldownText}`;
+    return `${index + 1}. ${target.label || "Unknown"} [${target.provider || "unknown"}/${target.modelId || "unknown"}] | ${authText} | ${healthText}${cooldownText}`;
   });
   return [
     `${routeId} — ${prettyRouteName(routeId)}`,
@@ -504,25 +509,27 @@ function formatModelLine(model: { provider: string; id: string; name: string; re
 }
 
 function searchModels(query: string, ctx: any): string {
-  const normalized = query.toLowerCase();
+  const normalized = String(query ?? "").toLowerCase();
   const matches = ctx.modelRegistry.getAvailable().filter((model: any) =>
-    model.id.toLowerCase().includes(normalized) ||
-    model.name.toLowerCase().includes(normalized) ||
-    model.provider.toLowerCase().includes(normalized)
+    String(model.id ?? "").toLowerCase().includes(normalized) ||
+    String(model.name ?? "").toLowerCase().includes(normalized) ||
+    String(model.provider ?? "").toLowerCase().includes(normalized)
   );
   if (matches.length === 0) return `No models found matching "${query}"`;
   return `Models matching "${query}" (${matches.length}):\n\n${matches.map((model: any) => formatModelLine(model, ctx.model)).join("\n\n")}`;
 }
 
 function searchRoutes(query: string): string {
-  const normalized = query.toLowerCase();
+  const normalized = String(query ?? "").toLowerCase();
   const routeMatches = Object.entries(routesCache).filter(([routeId, route]) =>
-    routeId.toLowerCase().includes(normalized) ||
-    (route.name ?? routeId).toLowerCase().includes(normalized) ||
-    route.targets.some((target) =>
-      target.label.toLowerCase().includes(normalized) ||
-      target.provider.toLowerCase().includes(normalized) ||
-      target.modelId.toLowerCase().includes(normalized)
+    String(routeId ?? "").toLowerCase().includes(normalized) ||
+    String(route.name ?? routeId ?? "").toLowerCase().includes(normalized) ||
+    (route.targets || []).some((target) =>
+      target && (
+        String(target.label ?? "").toLowerCase().includes(normalized) ||
+        String(target.provider ?? "").toLowerCase().includes(normalized) ||
+        String(target.modelId ?? "").toLowerCase().includes(normalized)
+      )
     )
   );
   if (routeMatches.length === 0) return `No routes found matching "${query}"`;
@@ -530,7 +537,7 @@ function searchRoutes(query: string): string {
 }
 
 function resolveAlias(name: string, ctx: any): { success?: string; error?: string } {
-  const aliasKey = Object.keys(aliasesCache).find((key) => key.toLowerCase() === name.toLowerCase());
+  const aliasKey = Object.keys(aliasesCache).find((key) => String(key ?? "").toLowerCase() === String(name ?? "").toLowerCase());
   if (!aliasKey) return { error: `Unknown alias: ${name}` };
   const candidates = Array.isArray(aliasesCache[aliasKey]) ? aliasesCache[aliasKey] as string[] : [aliasesCache[aliasKey] as string];
   const available = ctx.modelRegistry.getAvailable();
@@ -586,7 +593,7 @@ export default function (pi: ExtensionAPI) {
       updateUi(ctx);
       const trimmed = args.trim();
       const [subcommandRaw, ...rest] = trimmed ? trimmed.split(/\s+/) : [];
-      const subcommand = (subcommandRaw ?? "status").toLowerCase();
+      const subcommand = String(subcommandRaw ?? "status").toLowerCase();
       const remainder = rest.join(" ").trim();
       const activeModel = ctx.model;
       const activeRouteId = activeModel?.provider === PROVIDER_ID ? activeModel.id : undefined;
@@ -615,7 +622,7 @@ export default function (pi: ExtensionAPI) {
         }
 
         // Try as an alias
-        const aliasKey = Object.keys(aliasesCache).find((key) => key.toLowerCase() === remainder.toLowerCase());
+      const aliasKey = Object.keys(aliasesCache).find((key) => String(key ?? "").toLowerCase() === String(remainder ?? "").toLowerCase());
         if (aliasKey) {
           const candidates = Array.isArray(aliasesCache[aliasKey]) ? aliasesCache[aliasKey] as string[] : [aliasesCache[aliasKey] as string];
           for (const candidate of candidates) {
