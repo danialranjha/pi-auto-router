@@ -46,6 +46,8 @@ type CooldownState = {
 
 const cooldowns = new Map<string, CooldownState>();
 const lastAttemptByRoute = new Map<string, string>();
+const activeTargetByRoute = new Map<string, string>();
+let latestUiContext: any;
 
 const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
   "subscription-premium": {
@@ -137,6 +139,11 @@ function getAccessToken(authProvider: string): string | undefined {
 function getTargetKey(target: RouteTarget | undefined | null): string {
   if (!target) return "unknown/unknown";
   return `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
+}
+
+function describeTarget(target: RouteTarget | undefined | null): string {
+  if (!target) return "unknown target";
+  return `${target.label || "Unknown"} [${target.provider || "unknown"}/${target.modelId || "unknown"}]`;
 }
 
 function validateRouteTarget(target: unknown): target is RouteTarget {
@@ -324,6 +331,8 @@ async function tryTarget(
   context: Context,
   options?: SimpleStreamOptions,
 ): Promise<{ success: boolean; retryableFailure?: string; terminalError?: AssistantMessage }> {
+  activeTargetByRoute.set(outerModel.id, describeTarget(target));
+  refreshStatus(outerModel.id);
   const token = target.authProvider ? getAccessToken(target.authProvider) : undefined;
   if (target.authProvider && !token) {
     return { success: false, retryableFailure: `${target.label}: no valid subscription token` };
@@ -447,6 +456,8 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         lastAttemptByRoute.set(routeId, target.label);
         const result = await tryTarget(outer, model, target, context, options);
         if (result.success) {
+          activeTargetByRoute.delete(routeId);
+          refreshStatus(routeId);
           outer.end();
           return;
         }
@@ -455,14 +466,20 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           continue;
         }
         if (result.terminalError) {
+          activeTargetByRoute.delete(routeId);
+          refreshStatus(routeId);
           outer.end();
           return;
         }
       }
 
+      activeTargetByRoute.delete(routeId);
+      refreshStatus(routeId);
       outer.push({ type: "error", reason: "error", error: buildCombinedError(model, routeId, errors.length ? errors : ["all targets exhausted"]) });
       outer.end();
     } catch (error) {
+      activeTargetByRoute.delete(routeId);
+      refreshStatus(routeId);
       outer.push({ type: "error", reason: "error", error: buildCombinedError(model, routeId, [error instanceof Error ? error.message : String(error)]) });
       outer.end();
     }
@@ -474,9 +491,21 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 function getStatusLine(routeId?: string): string {
   if (!routeId || !(routeId in routesCache)) return "auto-router idle";
   const healthy = getHealthyTargets(routeId).map((target) => String(target?.label ?? "Unknown"));
-  const current = lastAttemptByRoute.get(routeId);
-  const active = current ? `last: ${current}` : "no calls yet";
+  const activeTarget = activeTargetByRoute.get(routeId);
+  const lastTarget = lastAttemptByRoute.get(routeId);
+  const active = activeTarget ? `current: ${activeTarget}` : lastTarget ? `last: ${lastTarget}` : "no calls yet";
   return `auto-router ${getRouteName(routeId)} | ${active} | healthy: ${healthy.join(", ") || "none"} | ${formatCooldowns(routeId)}`;
+}
+
+function refreshStatus(routeId?: string) {
+  const ctx = latestUiContext;
+  if (!ctx) return;
+  const activeModel = ctx.model;
+  if (activeModel?.provider === PROVIDER_ID) {
+    ctx.ui.setStatus("auto-router", getStatusLine(routeId ?? activeModel.id));
+  } else {
+    ctx.ui.setStatus("auto-router", undefined);
+  }
 }
 
 function routeSummary(routeId: string): string {
@@ -576,14 +605,14 @@ export default function (pi: ExtensionAPI) {
   rebuildProvider(pi);
 
   const updateUi = (ctx: any) => {
+    latestUiContext = ctx;
     loadRoutesConfig();
-    const activeModel = ctx.model;
-    if (activeModel?.provider === PROVIDER_ID) ctx.ui.setStatus("auto-router", getStatusLine(activeModel.id));
-    else ctx.ui.setStatus("auto-router", undefined);
+    refreshStatus();
   };
 
   pi.on("session_start", async (_event, ctx) => updateUi(ctx));
   pi.on("model_select", async (_event, ctx) => updateUi(ctx));
+  pi.on("agent_start", async (_event, ctx) => updateUi(ctx));
   pi.on("agent_end", async (_event, ctx) => updateUi(ctx));
 
   pi.registerCommand("auto-router", {
@@ -669,6 +698,7 @@ export default function (pi: ExtensionAPI) {
       if (subcommand === "reset") {
         cooldowns.clear();
         lastAttemptByRoute.clear();
+        activeTargetByRoute.clear();
         updateUi(ctx);
         ctx.ui.notify("Auto-router cooldowns reset", "success");
         return;
