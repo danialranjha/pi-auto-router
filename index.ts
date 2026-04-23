@@ -70,6 +70,7 @@ const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
       { provider: "claude-agent-sdk", modelId: "claude-opus-4-6", label: "Claude Opus 4.6 via Claude Code" },
       { provider: "openai-codex", modelId: "gpt-5.4", authProvider: "openai-codex", label: "GPT-5.4" },
       { provider: "google-antigravity", modelId: "gemini-3.1-pro-high", authProvider: "google-antigravity", label: "Gemini 3.1 Pro" },
+      { provider: "nvidia", modelId: "deepseek-ai/deepseek-v3.2", label: "DeepSeek v3.2 via NVIDIA" },
       { provider: "claude-agent-sdk", modelId: "claude-opus-4-5", label: "Claude Opus 4.5 via Claude Code" },
       { provider: "ollama", modelId: "glm-5.1:cloud", label: "GLM-5.1 via Ollama Cloud Subscription" }
     ]
@@ -95,6 +96,8 @@ const DEFAULT_ALIASES: AliasConfig = {
   glm: ["ollama/glm-5.1:cloud"],
   claude: ["claude-agent-sdk/claude-opus-4-6", "claude-agent-sdk/claude-opus-4-5"],
   gemini: ["google-antigravity/gemini-3.1-pro-high", "google-antigravity/gemini-3-flash"],
+  deepseek: ["nvidia/deepseek-ai/deepseek-v3.2"],
+  nvidia: ["nvidia/deepseek-ai/deepseek-v3.2"],
   codex: ["openai-codex/gpt-5.4", "openai-codex/gpt-5.2-codex"]
 };
 
@@ -226,20 +229,50 @@ function loadRoutesConfig(): void {
   }
 }
 
-function getInnerModel(target: RouteTarget): Model<Api> {
-  if (target.provider === "claude-agent-sdk") {
-    const anthropicBase = getModel("anthropic", target.modelId);
-    if (!anthropicBase) throw new Error(`Configured route target not found: anthropic/${target.modelId}`);
-    return {
-      ...anthropicBase,
-      provider: "claude-agent-sdk",
-      api: "claude-agent-sdk" as Api,
-      baseUrl: "claude-agent-sdk",
-    } as Model<Api>;
-  }
-  const model = getModel(target.provider, target.modelId);
+function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model<Api> | undefined {
+  const registry = (context as any)?.modelRegistry;
+  const available = typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+  const provider = target.provider === "claude-agent-sdk" ? "anthropic" : target.provider;
+  const requestedId = String(target.modelId ?? "").toLowerCase();
+  const requestedTail = requestedId.split("/").filter(Boolean).pop() ?? requestedId;
+
+  const wrapClaude = (base: any): Model<Api> => ({
+    ...base,
+    provider: "claude-agent-sdk",
+    api: "claude-agent-sdk" as Api,
+    baseUrl: "claude-agent-sdk",
+  } as Model<Api>);
+
+  const direct = (() => {
+    try {
+      return getModel(provider, target.modelId);
+    } catch {
+      return undefined;
+    }
+  })();
+  if (direct) return target.provider === "claude-agent-sdk" ? wrapClaude(direct) : (direct as Model<Api>);
+
+  if (!Array.isArray(available) || available.length === 0) return undefined;
+
+  const matches = available.filter((model: any) => String(model?.provider ?? "").toLowerCase() === provider.toLowerCase());
+  const pick = matches.find((model: any) => {
+    const id = String(model?.id ?? "").toLowerCase();
+    return id === requestedId || id === requestedTail || id.endsWith(`/${requestedId}`) || id.endsWith(`/${requestedTail}`);
+  }) ?? available.find((model: any) => {
+    const id = String(model?.id ?? "").toLowerCase();
+    const name = String(model?.name ?? "").toLowerCase();
+    return String(model?.provider ?? "").toLowerCase() === provider.toLowerCase() && (name.includes(requestedTail) || id.includes(requestedTail));
+  });
+
+  if (!pick) return undefined;
+
+  return target.provider === "claude-agent-sdk" ? wrapClaude(pick) : (pick as Model<Api>);
+}
+
+function getInnerModel(target: RouteTarget, context?: Context): Model<Api> {
+  const model = resolveModelFromRegistry(target, context);
   if (!model) throw new Error(`Configured route target not found: ${target.provider}/${target.modelId}`);
-  return model as Model<Api>;
+  return model;
 }
 
 function getPrimaryModelLimits(route: RouteDefinition): { contextWindow: number; maxTokens: number } {
@@ -364,7 +397,14 @@ async function tryTarget(
     return { success: false, retryableFailure: `${target.label}: no valid subscription token` };
   }
 
-  const innerModel = getInnerModel(target);
+  let innerModel: Model<Api>;
+  try {
+    innerModel = getInnerModel(target, context);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    putOnCooldown(target, message);
+    return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
+  }
   const buffered: any[] = [];
   let flushed = false;
   let sawSubstantive = false;

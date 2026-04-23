@@ -183,6 +183,7 @@ Skip it for providers that authenticate internally or don’t require pi-managed
 ## Behavior notes
 
 - Only **retryable** errors trigger automatic failover
+- Route targets that can’t be resolved from the registry are also treated as failoverable so the chain can keep moving
 - Failover happens only **before substantive output starts**
 - Once a provider/model emits real content, the router stays on that target
 - Retryable failures put the target on a temporary cooldown
@@ -195,6 +196,7 @@ The repository ships with opinionated defaults oriented around subscription-back
 - Claude Code via `claude-agent-sdk`
 - OpenAI Codex
 - Google Antigravity
+- NVIDIA DeepSeek (`deepseek-ai/deepseek-v3.2`)
 - Ollama Cloud (`glm-5.1:cloud`)
 
 You should edit `~/.pi/agent/extensions/auto-router.routes.json` to match your own environment.

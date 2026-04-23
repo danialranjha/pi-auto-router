@@ -28,6 +28,45 @@
           "label": "GLM-5.1 via Ollama Cloud Subscription"
         }
       ]
+    },
+    "subscription-coding": {
+      "name": "Subscription Coding Router",
+      "reasoning": true,
+      "input": ["text", "image"],
+      "targets": [
+        {
+          "provider": "claude-agent-sdk",
+          "modelId": "claude-opus-4-6",
+          "label": "Claude Opus 4.6 via Claude Code"
+        },
+        {
+          "provider": "openai-codex",
+          "modelId": "gpt-5.4",
+          "authProvider": "openai-codex",
+          "label": "GPT-5.4"
+        },
+        {
+          "provider": "google-antigravity",
+          "modelId": "gemini-3.1-pro-high",
+          "authProvider": "google-antigravity",
+          "label": "Gemini 3.1 Pro"
+        },
+        {
+          "provider": "nvidia",
+          "modelId": "deepseek-ai/deepseek-v3.2",
+          "label": "DeepSeek v3.2 via NVIDIA"
+        },
+        {
+          "provider": "claude-agent-sdk",
+          "modelId": "claude-opus-4-5",
+          "label": "Claude Opus 4.5 via Claude Code"
+        },
+        {
+          "provider": "ollama",
+          "modelId": "glm-5.1:cloud",
+          "label": "GLM-5.1 via Ollama Cloud Subscription"
+        }
+      ]
     }
   },
   "aliases": {
@@ -39,6 +78,12 @@
     "gemini": [
       "google-antigravity/gemini-3.1-pro-high",
       "google-antigravity/gemini-3-flash"
+    ],
+    "deepseek": [
+      "nvidia/deepseek-ai/deepseek-v3.2"
+    ],
+    "nvidia": [
+      "nvidia/deepseek-ai/deepseek-v3.2"
     ],
     "codex": [
       "openai-codex/gpt-5.4",
