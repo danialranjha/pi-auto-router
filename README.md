@@ -203,10 +203,37 @@ You should edit `~/.pi/agent/extensions/auto-router.routes.json` to match your o
 
 ## Development
 
-To try locally without installing globally:
+To work on `auto-router` in your local dev environment:
 
 ```bash
-pi -e /absolute/path/to/auto-router
+# 1. Clone the repo
+git clone git@github.com:danialranjha/pi-auto-router.git
+cd pi-auto-router
+
+# 2. Install dependencies
+npm install
+
+# 3. Copy the example config into place
+mkdir -p ~/.pi/agent/extensions
+cp auto-router.routes.example.json ~/.pi/agent/extensions/auto-router.routes.json
+
+# 4. Run pi with the local extension loaded
+pi -e /absolute/path/to/pi-auto-router
+```
+
+After making changes to `index.ts`, reload the extension inside pi without restarting:
+
+```text
+/auto-router reload
+```
+
+Use the built-in debug commands to verify routing and model resolution:
+
+```text
+/auto-router status
+/auto-router list
+/auto-router debug
+/auto-router test-resolve <alias>
 ```
 
 ## License
