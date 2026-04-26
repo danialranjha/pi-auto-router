@@ -182,7 +182,11 @@ type ContextClassification = 'short' | 'medium' | 'long' | 'epic';
 ### Phase 7: ⬜ Advanced Features (Future)
 - [ ] Performance-based ranking (track latency per provider)
 - [ ] Intent classification (code vs creative vs analysis)
-- [ ] Dynamic budget reallocation
+- [ ] **Dynamic budget reallocation (Utilization Velocity Index)**:
+    - Shift from static USD limits to real-time quota pressure sensing by polling status from OAuth providers (Claude, Gemini, etc.).
+    - Implement a **Utilization Velocity Index (UVI)** that compares consumed quota percentage against the time remaining in the reset window.
+    - Automatically "tax" high-tier models when they are trending toward premature exhaustion (e.g., 25% used with 85% of the week remaining).
+    - "Unlock" premium models for standard tasks when a surplus is detected near the end of a reset cycle.
 - [ ] Provider health checks (proactive ping)
 - [ ] User feedback loop (`/auto-router rate <good|bad> [reason]`)
 

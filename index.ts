@@ -357,13 +357,16 @@ function getPrimaryModelLimits(route: RouteDefinition): { contextWindow: number;
 function isRetryableError(message: any): boolean {
   const text = String(message ?? "").toLowerCase();
   if (!text) return false;
+  // NOTE: This only matches against actual error event strings (not model text output).
+  // Be conservative with single-word tokens — they're prone to false positives.
   return [
-    "429", "rate limit", "ratelimit", "too many requests", "overloaded", "overload", "capacity",
-    "temporarily unavailable", "timeout", "timed out", "econnreset", "etimedout", "network", "connection",
-    "try again", "internal server error", "502", "503", "504",
-    "quota", "quota will reset", "credit", "balance", "billing", "exhausted", "exhausted your capacity",
-    "reached", "limit", "bad gateway", "service unavailable", "gateway timeout", "500", "busy", "upstream",
-    "hit your limit", "quota exceeded", "credits exhausted", "insufficient balance",
+    "429", "rate limit", "ratelimit", "too many requests",
+    "temporarily unavailable", "timeout", "timed out", "econnreset", "etimedout",
+    "network", "connection", "try again", "internal server error",
+    "502", "503", "504", "500",
+    "quota", "quota will reset", "quota exceeded",
+    "hit your limit", "credits exhausted", "insufficient balance",
+    "bad gateway", "service unavailable", "gateway timeout", "busy", "upstream",
     "invalid 'input", "call_id", "function_response.name", "required_field_missing",
     "400 status code", "invalid_request_error", "invalid google cloud code assist credentials"
   ].some((needle) => text.includes(needle));
@@ -393,6 +396,12 @@ function getCooldownMs(message: any): number {
   const text = String(message ?? "").toLowerCase();
   if (text.includes("429") || text.includes("rate limit") || text.includes("too many requests")) return 2 * 60_000;
   if (text.includes("quota") || text.includes("capacity") || text.includes("overloaded") || text.includes("503")) return 5 * 60_000;
+  // 404 / 410 / "not found" / "model not available" — model is gone, back off for an hour.
+  // Use word boundaries so "4040ms" / "version 404.x" don't match.
+  if (/\b(404|410)\b/.test(text) || text.includes("not found") || text.includes("model not available") || text.includes("gone")) return 60 * 60_000;
+  // 400 / "bad request" / context-length errors — payload-specific, brief cooldown so the next
+  // call (with a different payload) can still try this target.
+  if (/\b400\b/.test(text) || text.includes("bad request") || text.includes("maximum context length") || text.includes("context_length_exceeded")) return 30_000;
   return 90_000;
 }
 
@@ -546,13 +555,6 @@ async function tryTarget(
       ].includes(event.type);
 
       if (isRealContent) {
-        if (event.type === "text_delta") {
-          const deltaText = (event as any).text ?? (event as any).delta ?? "";
-          if (isRetryableError(deltaText)) {
-            putOnCooldown(target, deltaText);
-            return { success: false, retryableFailure: `${target.label}: ${deltaText}` };
-          }
-        }
         sawSubstantive = true;
       } else if (event.type === "thinking_delta") {
         thinkingCount++;
