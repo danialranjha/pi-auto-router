@@ -265,6 +265,8 @@ function normalizeModelToken(value: string): string {
 function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model<Api> | undefined {
   const registry = (context as any)?.modelRegistry || latestUiContext?.modelRegistry;
   const available = typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+  
+  // Try to find the provider even if available is empty (for built-in models)
   const provider = target.provider === "claude-agent-sdk" ? "anthropic" : target.provider;
   const requestedId = String(target.modelId ?? "").toLowerCase();
   const requestedParts = requestedId.split("/").filter(Boolean);
@@ -286,8 +288,16 @@ function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model
 
   const direct = (() => {
     try {
+      // Use the actual provider name for getModel
       return getModel(provider, target.modelId);
     } catch {
+      try {
+          // Fallback to searching without provider prefix if modelId already has it
+          if (target.modelId.includes("/")) {
+              const [p, m] = target.modelId.split("/");
+              return getModel(p, m);
+          }
+      } catch {}
       return undefined;
     }
   })();
@@ -353,16 +363,18 @@ function isRetryableError(message: any): boolean {
     "try again", "internal server error", "502", "503", "504",
     "quota", "quota will reset", "credit", "balance", "billing", "exhausted", "exhausted your capacity",
     "reached", "limit", "bad gateway", "service unavailable", "gateway timeout", "500", "busy", "upstream",
-    "hit your limit", "quota exceeded", "credits exhausted", "insufficient balance"
+    "hit your limit", "quota exceeded", "credits exhausted", "insufficient balance",
+    "invalid 'input", "call_id", "function_response.name", "required_field_missing",
+    "400 status code", "invalid_request_error", "invalid google cloud code assist credentials"
   ].some((needle) => text.includes(needle));
 }
 
 function parseResetAfterMs(message: any): number | undefined {
   const text = String(message ?? "");
-  const match = text.match(/reset after\s+(\d+)\s*([smhd])/i);
+  const match = text.match(/reset after\s+(\d+)\s*(s|m|h|d|second|minute|hour|day)s?/i);
   if (!match) return undefined;
   const value = Number(match[1]);
-  const unit = match[2].toLowerCase();
+  const unit = match[2].toLowerCase()[0]; // Take the first character: s, m, h, d
   if (!Number.isFinite(value) || value <= 0) return undefined;
   const unitMs = unit === "s"
     ? 1_000
@@ -440,6 +452,48 @@ function buildCombinedError(model: Model<Api>, routeId: string, errors: string[]
   };
 }
 
+function sanitizeContext(context: Context): Context {
+  const messages = (context as any)?.messages;
+  if (!Array.isArray(messages)) return context;
+
+  const newMessages = messages.map((msg: any) => {
+    if (!msg) return msg;
+    const newMsg = { ...msg };
+
+    // Handle tool calls in assistant messages
+    if (msg.role === "assistant" && Array.isArray(msg.tool_calls)) {
+      newMsg.tool_calls = msg.tool_calls.map((tc: any) => {
+        const newTc = { ...tc };
+        if (newTc.id === undefined || newTc.id === null || String(newTc.id).trim() === "") {
+          newTc.id = `call_${Math.random().toString(36).substring(2, 11)}`;
+        }
+        return newTc;
+      });
+    }
+
+    // Handle tool results
+    if (msg.role === "tool" || msg.role === "toolResult") {
+      const toolCallId = msg.tool_call_id || msg.toolCallId;
+      if (toolCallId === undefined || toolCallId === null || String(toolCallId).trim() === "") {
+        const generatedId = `call_${Math.random().toString(36).substring(2, 11)}`;
+        if (msg.role === "tool") newMsg.tool_call_id = generatedId;
+        else newMsg.toolCallId = generatedId;
+      }
+      
+      const toolName = msg.name || msg.toolName;
+      // Gemini requires a name for function_response
+      if (toolName === undefined || toolName === null || String(toolName).trim() === "") {
+        if (msg.role === "tool") newMsg.name = "unknown_tool";
+        else newMsg.toolName = "unknown_tool";
+      }
+    }
+
+    return newMsg;
+  });
+
+  return { ...context, messages: newMessages } as Context;
+}
+
 async function tryTarget(
   outer: AssistantMessageEventStream,
   outerModel: Model<Api>,
@@ -450,8 +504,11 @@ async function tryTarget(
   activeTargetByRoute.set(outerModel.id, describeTarget(target));
   refreshStatus(outerModel.id);
   const token = target.authProvider ? getAccessToken(target.authProvider) : undefined;
+  
   if (target.authProvider && !token) {
-    return { success: false, retryableFailure: `${target.label}: no valid subscription token` };
+    const message = `${target.label}: no valid subscription token`;
+    putOnCooldown(target, message);
+    return { success: false, retryableFailure: message };
   }
 
   let innerModel: Model<Api>;
@@ -474,68 +531,78 @@ async function tryTarget(
     flushed = true;
   };
 
-  const inner = streamSimple(innerModel, context, { ...options, apiKey: token });
+  const sanitized = sanitizeContext(context);
+  const inner = streamSimple(innerModel, sanitized, { ...options, apiKey: token });
   let lastMessage: AssistantMessage | undefined;
 
-  for await (const event of inner) {
-    if (event.type === "done") {
-      lastMessage = event.message;
-    }
-
-    const isRealContent = [
-      "text_start", "text_delta", "toolcall_start", "toolcall_delta", "toolcall_end"
-    ].includes(event.type);
-
-    if (isRealContent) {
-      if (event.type === "text_delta") {
-        const deltaText = (event as any).text ?? (event as any).delta ?? "";
-        if (isRetryableError(deltaText)) {
-          putOnCooldown(target, deltaText);
-          return { success: false, retryableFailure: `${target.label}: ${deltaText}` };
-        }
+  try {
+    for await (const event of inner) {
+      if (event.type === "done") {
+        lastMessage = event.message;
       }
-      sawSubstantive = true;
-    } else if (event.type === "thinking_delta") {
-      thinkingCount++;
-      if (thinkingCount > 10) sawSubstantive = true;
-    } else if (event.type === "thinking_start") {
-      // thinking_start is not immediately substantive to allow failover
-      // if the model fails right after starting to think.
-    }
 
-    if (event.type === "error") {
-      const message = event.error?.errorMessage || `${target.label || "Target"}: unknown error`;
-      if (!sawSubstantive && isRetryableError(message)) {
-        putOnCooldown(target, message);
-        return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
+      const isRealContent = [
+        "text_start", "text_delta", "toolcall_start", "toolcall_delta", "toolcall_end"
+      ].includes(event.type);
+
+      if (isRealContent) {
+        if (event.type === "text_delta") {
+          const deltaText = (event as any).text ?? (event as any).delta ?? "";
+          if (isRetryableError(deltaText)) {
+            putOnCooldown(target, deltaText);
+            return { success: false, retryableFailure: `${target.label}: ${deltaText}` };
+          }
+        }
+        sawSubstantive = true;
+      } else if (event.type === "thinking_delta") {
+        thinkingCount++;
+        if (thinkingCount > 10) sawSubstantive = true;
+      } else if (event.type === "thinking_start") {
+        // thinking_start is not immediately substantive to allow failover
+        // if the model fails right after starting to think.
       }
-      flush();
-      outer.push({
-        ...event,
-        error: {
-          ...(event.error || {}),
-          provider: outerModel.provider,
-          model: outerModel.id,
-          errorMessage: `${target.label || "Target"}: ${message}`
-        }
-      });
-      return {
-        success: false,
-        terminalError: {
-          ...(event.error || {}),
-          provider: outerModel.provider,
-          model: outerModel.id,
-          errorMessage: `${target.label || "Target"}: ${message}`
-        }
-      } as any;
-    }
 
-    if (flushed) {
-      outer.push(event);
-    } else {
-      buffered.push(event);
-      if (sawSubstantive || event.type === "done") flush();
+      if (event.type === "error") {
+        const message = event.error?.errorMessage || `${target.label || "Target"}: unknown error`;
+        if (!sawSubstantive && isRetryableError(message)) {
+          putOnCooldown(target, message);
+          return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
+        }
+        flush();
+        outer.push({
+          ...event,
+          error: {
+            ...(event.error || {}),
+            provider: outerModel.provider,
+            model: outerModel.id,
+            errorMessage: `${target.label || "Target"}: ${message}`
+          }
+        });
+        return {
+          success: false,
+          terminalError: {
+            ...(event.error || {}),
+            provider: outerModel.provider,
+            model: outerModel.id,
+            errorMessage: `${target.label || "Target"}: ${message}`
+          }
+        } as any;
+      }
+
+      if (flushed) {
+        outer.push(event);
+      } else {
+        buffered.push(event);
+        if (sawSubstantive || event.type === "done") flush();
+      }
     }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!sawSubstantive && isRetryableError(message)) {
+      putOnCooldown(target, message);
+      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
+    }
+    throw error;
   }
 
   lastAttemptByRoute.set(outerModel.id, target.label);
@@ -811,11 +878,15 @@ function getStatusLine(routeId?: string): string {
 function refreshStatus(routeId?: string) {
   const ctx = latestUiContext;
   if (!ctx) return;
-  const activeModel = ctx.model;
-  if (activeModel?.provider === PROVIDER_ID) {
-    ctx.ui.setStatus("auto-router", getStatusLine(routeId ?? activeModel.id));
-  } else {
-    ctx.ui.setStatus("auto-router", undefined);
+  try {
+    const activeModel = ctx.model;
+    if (activeModel?.provider === PROVIDER_ID) {
+      ctx.ui.setStatus("auto-router", getStatusLine(routeId ?? activeModel.id));
+    } else {
+      ctx.ui.setStatus("auto-router", undefined);
+    }
+  } catch {
+    // Ignore stale context errors in non-interactive mode or during teardown
   }
 }
 
