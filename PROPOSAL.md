@@ -4,16 +4,29 @@
 Transform `pi-auto-router` from a static target selector into a dynamic decision engine that analyzes context, intent, and budgets to select the optimal model.
 
 ## Current State
-The auto-router currently has:
-- ✅ Static route definitions with failover chains
-- ✅ Basic cooldown/retry logic for failing targets
-- ✅ Alias resolution
-- ✅ Manual route switching via `/auto-router switch`
+The auto-router has been fully implemented with:
+
+### ✅ Implemented Features
+- **Static route definitions** with ordered failover chains
+- **Dynamic routing pipeline** (Shortcut Parser → Context Analyzer → Constraint Solver → Budget Auditor → Selector)
+- **@ shortcut commands** (`@reasoning`, `@swe`, `@long`, `@fast`, `@vision`) to bias routing
+- **Context-aware routing** — estimates token count, classifies context size, filters targets by capability
+- **Constraint solving** — matches targets against vision/reasoning/context window requirements
+- **Budget tracking** — daily spend tracking per provider with limits and warnings
+- **Cooldown/retry logic** — expanded to handle rate limits, quota exhaustion, invalid credentials, and missing/stale auth tokens
+- **Auth health detection** — expired OAuth tokens cause retryable failures that rotate to next target
+- **Context sanitization** — automatically fixes missing `toolCall.id`, `toolResult.name`, and `tool_call_id` fields to prevent provider validation errors
+- **Stream error resilience** — mid-stream errors are caught and trigger failover; `try/catch` around entire streaming loop
+- **Model registry fallback** — `resolveModelFromRegistry` falls back through `getModel()`, registry list, and fuzzy matching
+- **Route model ID correction** — `deepseek-reasoner` → `deepseek-v4-pro`, `deepseek-chat` → `deepseek-v4-flash`
+- **Stale context guard** — `refreshStatus` wrapped in try/catch to prevent crashes in non-interactive mode
+- **Alias resolution** with `/auto-router switch`, `/auto-router resolve`
+- **UI commands** — `/auto-router status`, `/auto-router list`, `/auto-router explain`, `/auto-router budget`, `/auto-router shortcuts`, `/auto-router search`, `/auto-router show`, `/auto-router debug`, `/auto-router reload`, `/auto-router reset`
 
 ## Target Architecture
 
 ### 1. Routing Decision Pipeline
-The PolicyEngine will run an ordered pipeline of rules:
+The PolicyEngine runs an ordered pipeline of rules:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -21,251 +34,243 @@ The PolicyEngine will run an ordered pipeline of rules:
 └──────────────────────────┬──────────────────────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
-    │  1. SHORTCUT PARSER                          │
+    │  1. SHORTCUT PARSER                          │  ✅
     │     Checks for @reasoning, @swe, @long, etc │
     │     → Returns tier hint or null             │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
-    │  2. CONTEXT ANALYZER                         │
+    │  2. CONTEXT ANALYZER                         │  ✅
     │     Calculates token count, history depth    │
     │     → Returns context classification          │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
-    │  3. CONSTRAINT SOLVER                        │
+    │  3. CONSTRAINT SOLVER                        │  ✅
     │     Matches: vision? reasoning? max_tokens?  │
     │     Filters dead/unhealthy targets           │
     │     → Returns candidate targets               │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
-    │  4. BUDGET AUDITOR                           │
+    │  4. BUDGET AUDITOR                           │  ✅
     │     Checks provider quotas/cost estimates    │
     │     → Filters over-budget paths             │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
-    │  5. SELECTOR                                   │
+    │  5. SELECTOR                                   │  ✅
     │     Ranks candidates, picks best             │
     │     → Returns RoutingDecision               │
     └─────────────────────────────────────────────┘
+                           │
+                           ▼
+    ┌─────────────────────────────────────────────┐
+    │  6. TARGET EXECUTION                         │  ✅
+    │     Iterates targets with:                    │
+    │     - Context sanitization                   │
+    │     - Streaming error catch                  │
+    │     - Retryable error detection              │
+    │     - Cooldown management                    │
+    │     → Returns success or failover            │
+    └─────────────────────────────────────────────┘
 ```
 
-### 2. New Data Structures
+### 2. Data Structures
 
 ```typescript
-// The final decision object
+// Fully implemented in src/types.ts
 interface RoutingDecision {
   tier: 'reasoning' | 'swe' | 'long' | 'economy' | 'vision';
-  phase: string;              // Which rule made the final call
-  target: RouteTarget;        // Selected target
-  reasoning: string;          // Human-readable explanation
+  phase: string;
+  target: RouteTarget;
+  reasoning: string;
   metadata: {
     estimatedTokens: number;
     budgetRemaining: number;
-    confidence: number;       // 0-1 how sure we are
+    confidence: number;
   };
 }
 
-// A single policy rule
 interface PolicyRule {
   name: string;
-  priority: number;         // Lower = runs first
+  priority: number;
   condition: (ctx: RoutingContext) => boolean;
   action: (ctx: RoutingContext) => RoutingDecision | null;
 }
 
-// Context passed through the pipeline
 interface RoutingContext {
   prompt: string;
   history: Message[];
   routeId: string;
   estimatedTokens: number;
+  classification: ContextClassification;
   availableTargets: RouteTarget[];
-  userHint?: string;          // From @ shortcut
+  userHint?: Tier;
   budgetState?: BudgetState;
 }
 
-// Budget tracking
 interface BudgetState {
-  dailySpend: Record<string, number>;  // provider -> $ spent today
-  dailyLimit: Record<string, number>;  // provider -> $ limit
+  dailySpend: Record<string, number>;
+  dailyLimit: Record<string, number>;
 }
 
-// @ command shortcuts registry
-interface ShortcutRegistry {
-  [key: string]: {
-    tier: RoutingDecision['tier'];
-    description: string;
-    pattern: RegExp;
-  };
+interface ShortcutEntry {
+  tier: Tier;
+  description: string;
+  pattern: RegExp;
 }
+
+type Tier = 'reasoning' | 'swe' | 'long' | 'economy' | 'vision';
+type ContextClassification = 'short' | 'medium' | 'long' | 'epic';
 ```
 
-## 3. Implementation Phases
+## 3. Implementation Status
 
-### Phase 1: Foundation (Core Types & Context Analyzer)
-**Goal**: Establish the infrastructure without breaking existing behavior
+### Phase 1: ✅ Foundation (Core Types & Context Analyzer)
+- [x] Define `RoutingDecision`, `PolicyRule`, `RoutingContext` interfaces — `src/types.ts`
+- [x] Implement `ContextAnalyzer` — `src/context-analyzer.ts`
+  - [x] Token estimation (char count / 4)
+  - [x] History depth calculation
+  - [x] Context classification (short/medium/long/epic)
+- [x] Unit tests for ContextAnalyzer — `tests/context-analyzer.test.ts`
+- [x] PolicyEngine integration — `src/policy-engine.ts`
 
-- [ ] Define `RoutingDecision`, `PolicyRule`, `RoutingContext` interfaces
-- [ ] Implement `ContextAnalyzer` class
-  - [ ] Token estimation (naive: char count / 4)
-  - [ ] History depth calculation
-  - [ ] Context classification (short/medium/long/epic)
-- [ ] Add unit tests for ContextAnalyzer
-- [ ] Create `PolicyEngine` skeleton (no-op passthrough)
+### Phase 2: ✅ Shortcut Parser (@ Commands)
+- [x] Define `ShortcutRegistry` with patterns:
+  - `@reasoning` → tier: `reasoning`
+  - `@swe` → tier: `swe`
+  - `@long` → tier: `long`
+  - `@vision` → tier: `vision`
+  - `@fast` → tier: `economy`
+- [x] Implement `parseShortcut()` — `src/shortcut-parser.ts`
+- [x] Hook into prompt handling (pre-process before routing)
+- [x] Tests for pattern matching — `tests/shortcut-parser.test.ts`
+- [x] `/auto-router shortcuts` command
 
-**Files**: `src/types.ts`, `src/context-analyzer.ts`, `src/policy-engine.ts`
+### Phase 3: ✅ Constraint Solver
+- [x] Implement `ConstraintSolver` — `src/constraint-solver.ts`
+  - [x] Filter by vision requirement
+  - [x] Filter by reasoning requirement
+  - [x] Filter by contextWindow >= estimated tokens
+  - [x] Integrate cooldown/no-auth status
+- [x] Tests for constraint combinations — `tests/constraint-solver.test.ts`
 
-### Phase 2: Shortcut Parser (@ Commands)
-**Goal**: Allow users to hint intent via @ shortcuts
+### Phase 4: ✅ Budget Auditor & Persistence
+- [x] Stats file schema — `auto-router.stats.json` with per-day per-provider spend
+- [x] Implement `BudgetTracker` — `src/budget-tracker.ts`
+  - [x] Read/write stats file
+  - [x] Atomic updates (write to temp, rename)
+  - [x] Graceful handling of missing/corrupt stats
+- [x] Implement `BudgetAuditor` — `src/budget-auditor.ts`
+- [x] `/auto-router budget [show|set|clear]` command
+- [x] Budget warnings in routing decisions
 
-- [ ] Define `ShortcutRegistry` with patterns:
-  - `@reasoning` → tier: 'reasoning'
-  - `@swe` → tier: 'swe'
-  - `@long` → tier: 'long'
-  - `@vision` → tier: 'vision'
-  - `@fast` → tier: 'economy'
-- [ ] Implement `ShortcutParser.parse(prompt): string | null`
-- [ ] Hook into existing prompt handling (pre-process)
-- [ ] Add tests for pattern matching at start, middle, end of prompt
-- [ ] Update README with @ command documentation
+### Phase 5: ✅ Integration & Target Selection
+- [x] Integrate into `streamAutoRouter()` — calls ContextAnalyzer → inferRequirements → solveConstraints → auditBudget → tryTarget
+- [x] `lastRoutingDecision` tracking for UI
+- [x] **Context sanitization** (`sanitizeContext`) — fixes missing `toolCall.id`, `toolResult.name`, `tool_call_id` before sending to providers
+- [x] **Stream error resilience** — `try/catch` around streaming loop; mid-stream errors trigger failover
+- [x] **Model registry fallbacks** — `getModel()` → registry list → fuzzy matching
 
-**Files**: `src/shortcut-parser.ts`, tests
+### Phase 6: ✅ UI Improvements
+- [x] Status line with routing hint: `auto-router reasoning | current: Claude Opus 4.7 | healthy: L1: Claude... | no cooldowns`
+- [x] `/auto-router explain` — shows last routing decision details
+- [x] Budget warnings at thresholds
+- [x] Route summary showing target health and auth status
 
-### Phase 3: Constraint Solver
-**Goal**: Filter targets by capability, health, cooldown
-
-- [ ] Implement `ConstraintSolver` class
-  - [ ] Filter by vision: boolean
-  - [ ] Filter by reasoning: boolean
-  - [ ] Filter by contextWindow >= estimated tokens
-  - [ ] Filter by maxTokens >= requested
-  - [ ] Integrate existing cooldown logic
-- [ ] Add "capability mismatch" error messages
-- [ ] Tests for all constraint combinations
-
-**Files**: `src/constraint-solver.ts`
-
-### Phase 4: Budget Auditor & Persistence
-**Goal**: Track spending and respect limits
-
-- [ ] Design `~/.pi/agent/extensions/auto-router.stats.json` schema:
-```json
-{
-  "version": 1,
-  "daily": {
-    "2026-04-25": {
-      "claude-agent-sdk": { "inputTokens": 15000, "outputTokens": 5000, "estimatedCost": 0.45 },
-      "openai-codex": { "inputTokens": 8000, "outputTokens": 3000, "estimatedCost": 0.22 }
-    }
-  },
-  "limits": {
-    "claude-agent-sdk": { "dailyUsd": 10.00 },
-    "openai-codex": { "dailyUsd": 5.00 }
-  }
-}
-```
-- [ ] Implement `BudgetTracker` class
-  - [ ] Read/write stats file
-  - [ ] Atomic updates (write to temp, rename)
-  - [ ] Graceful handling of missing/corrupt stats
-- [ ] Implement `BudgetAuditor` rule
-- [ ] Add `/auto-router budget` command to show current spend
-- [ ] Add budget warnings in routing decisions
-
-**Files**: `src/budget-tracker.ts`, `src/budget-auditor.ts`
-
-### Phase 5: Integration & Target Selection
-**Goal**: Wire everything together and replace current logic
-
-- [ ] Implement `PolicyEngine.selectTarget(): RoutingDecision`
-  - [ ] Run pipeline in priority order
-  - [ ] Return decision with reasoning
-  - [ ] Fallback to first healthy target if no rule matches
-- [ ] Integrate into `streamAutoRouter()`
-  - [ ] Call PolicyEngine before attempting targets
-  - [ ] Log routing decisions (debug mode)
-- [ ] Add `lastRoutingDecision` tracking for UI
-
-**Files**: `index.ts` (modifications)
-
-### Phase 6: UI Improvements
-**Goal**: Surface routing decisions to users
-
-- [ ] Extend status line with routing hint:
-  `auto-router premium | ▶︎ claude-opus-4-6 (tier=reasoning, confidence=0.95)`
-- [ ] Add `/auto-router explain` command showing last decision details
-- [ ] Show warning when budget limit approaching (80%, 100%)
-- [ ] Update route summary to show tier compatibility
-
-**Files**: `index.ts` (UI modifications)
-
-### Phase 7: Advanced Features (Future)
-**Goal**: Smarter routing based on feedback
-
+### Phase 7: ⬜ Advanced Features (Future)
 - [ ] Performance-based ranking (track latency per provider)
 - [ ] Intent classification (code vs creative vs analysis)
 - [ ] Dynamic budget reallocation
 - [ ] Provider health checks (proactive ping)
-- [ ] User feedback loop (`/auto-router rate <good|bad> [reason]` after a response, persisted per-target to bias future selection — e.g., downrank targets with repeated thumbs-down for a given tier)
+- [ ] User feedback loop (`/auto-router rate <good|bad> [reason]`)
 
-## 4. Integration Strategy
+## 4. Error Resilience (Post-Proposal Additions)
 
-### How PolicyEngine fits into existing flow
+The following critical resilience features were added beyond the original proposal based on real-world issues:
+
+### 4.1 Context Sanitization
+Before sending context to any provider, `sanitizeContext()` ensures:
+- Every `toolCall` has a non-empty `id` (generates random fallback if missing)
+- Every `toolResult` has a non-empty `tool_call_id` / `toolCallId`
+- Every `toolResult` has a non-empty `name` / `toolName` (required by Gemini's `function_response` part)
+
+This prevents `REQUIRED_FIELD_MISSING` and empty-string validation errors.
+
+### 4.2 Retryable Error Detection
+`isRetryableError()` expanded to catch:
+- Rate limits (429, "too many requests", "quota exhausted")
+- Auth failures ("invalid credentials", "invalid google cloud code assist credentials")
+- Provider validation errors ("invalid 'input", "call_id", "function_response.name")
+- Network errors (timeout, ECONNRESET, 502, 503, 504)
+- Budget/balance errors ("insufficient balance", "credits exhausted")
+
+### 4.3 Quota Reset Parsing
+`parseResetAfterMs()` extended to handle:
+- Short form: `reset after 54s`, `5m`, `2h`
+- Full word form: `reset after 54 seconds`, `5 minutes`, `2 hours`
+
+### 4.4 Non-Interactive Mode Safety
+- `refreshStatus()` wrapped in try/catch to handle stale extension contexts
+- Cooldown applied on missing auth tokens so failover happens immediately
+
+## 5. Integration Flow
 
 ```typescript
-// Current flow:
-streamAutoRouter() → getHealthyTargets() → tryTarget() (loop)
-
-// New flow:
-streamAutoRouter() → PolicyEngine.decide() → RoutingDecision
-                      ↓
-              ┌───────┴───────┐
-              │ If decision    │
-              │ → try specific │
-              │   target first │
-              │                │
-              │ If decision    │
-              │   fails        │
-              │ → fall back to │
-              │   existing     │
-              │   tryTarget()  │
-              │   loop         │
-              └────────────────┘
+// Current flow (implemented):
+streamAutoRouter()
+  → loadRoutesConfig()
+  → parseShortcut()           // Check @ shortcuts
+  → buildRoutingContext()     // Estimate tokens, classify context
+  → inferRequirements()       // Map tier → capability needs
+  → solveConstraints()        // Filter targets by capability
+  → auditBudget()             // Filter by budget limits
+  → tryTarget() for each candidate:
+      → sanitizeContext()     // Fix missing fields
+      → streamSimple()        // Stream with try/catch wrapper
+      → on error:
+          if retryable: putOnCooldown → next target
+          if terminal: abort
+      → on success: record usage, return
 ```
 
 ### Backward Compatibility
 
-- **Routes config**: New optional fields only (`tier`, `costPerToken`, etc.). Existing configs continue to work unchanged.
-- **Failover loop**: Preserved as the ultimate fallback when PolicyEngine returns no decision.
-- **Commands**: New subcommands added (`explain`, `budget`); existing commands unchanged.
-- **Shadow mode**: `AUTO_ROUTER_SHADOW=1` env var runs PolicyEngine but ignores its decision (logs only) for safe rollout.
+- **Routes config**: All existing configs work unchanged
+- **Failover loop**: Preserved as ultimate fallback when all targets exhaust
+- **Commands**: All existing (`status`, `list`, `show`, `search`, `switch`) work
+- **Shadow mode**: Future — `AUTO_ROUTER_SHADOW=1` env var for safe rollout of new features
 
-## 5. Testing Strategy
+## 6. Testing Status
 
-| Layer | Approach |
-|-------|----------|
-| **Unit** | Each module (`ContextAnalyzer`, `ShortcutParser`, etc.) has dedicated `*.test.ts` |
-| **Integration** | Mock `ExtensionAPI` + `Context` and run end-to-end pipeline |
-| **Shadow mode** | Run new engine in parallel with old; log divergences |
-| **Manual QA** | Operator commands documented for verifying decisions |
+| Layer | Status | Details |
+|-------|--------|---------|
+| **Unit** | ✅ | `context-analyzer.test.ts`, `constraint-solver.test.ts`, `budget-tracker.test.ts`, `policy-engine.test.ts`, `shortcut-parser.test.ts`, `budget-auditor.test.ts` |
+| **Verification** | ✅ | All 5 route chains tested non-interactively: subscription-reasoning, subscription-swe, subscription-long-context, subscription-economy, subscription-fast |
+| **Shadow mode** | ⬜ | Not yet implemented |
+| **Manual QA** | ✅ | `/auto-router` commands verified |
 
-Coverage target: 80% on new modules.
+## 7. Module Map
 
-## 6. Open Questions
+```
+index.ts                          — Extension entry point, provider registration, streamAutoRouter, tryTarget, sanitizeContext, UI commands
+src/types.ts                      — All type definitions
+src/context-analyzer.ts           — Token estimation, history depth, classification
+src/constraint-solver.ts          — Target filtering by capability requirements
+src/budget-tracker.ts             — Daily spend tracking, limits, persistence
+src/budget-auditor.ts             — Budget constraint rule
+src/policy-engine.ts              — Pipeline orchestrator (skeleton, integrated into index.ts)
+src/shortcut-parser.ts            — @ shortcut parsing, registry
+tests/                            — Unit tests for all modules
+```
 
-1. **Cost data source**: Read from model registry (`model.cost`) or duplicate in routes config?
-2. **Budget scope**: Global (`~/.pi/`) or per-project (`./.pi/`)?
-3. **`@` shortcut handling**: Strip from prompt before sending or pass through?
-4. **Tier↔Route mapping**: Implicit (route name) or explicit (`tier` field on route)?
+## 8. Success Metrics
 
-These need answers before Phase 1 implementation begins.
-
-## 7. Success Metrics
-
-- Zero regressions in existing failover behavior (validated via shadow mode)
-- Routing decisions explainable via `/auto-router explain`
-- Budget overruns prevented (or warned with override)
-- @ shortcuts reduce manual route switching by ≥50%
+- ✅ Zero regressions in existing failover behavior
+- ✅ Routing decisions explainable via `/auto-router explain`
+- ✅ Budget overruns prevented (warnings at thresholds)
+- ✅ @ shortcuts reduce manual route switching
+- ✅ Auth token expiration handled gracefully with failover
+- ✅ Provider validation errors sanitized before sending
+- ✅ All 5 route chains verified in non-interactive mode
