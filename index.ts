@@ -1093,9 +1093,29 @@ function getStatusLine(routeId?: string): string {
 }
 
 function formatUviStatusSegment(): string {
-  if (!quotaCache.isEnabled()) return "";
-  const snaps = Object.values(quotaCache.getAllSnapshots());
-  const hot = snaps.filter((s) => s.status === "stressed" || s.status === "critical");
+  const snaps: Record<string, UtilizationSnapshot> = {};
+
+  // Subscription UVI (only when enabled)
+  if (quotaCache.isEnabled()) {
+    Object.assign(snaps, quotaCache.getAllSnapshots());
+  }
+
+  // Per-token UVI from monthly spend vs budget
+  const now = Date.now();
+  const monthlyLimit = budgetTracker.getMonthlyLimits();
+  const monthlySpend = budgetTracker.getMonthlySpend();
+  for (const [provider, balance] of balanceCache) {
+    if (balance.error) continue;
+    const limit = monthlyLimit[provider];
+    if (!limit || limit <= 0) continue;
+    const spend = monthlySpend[provider] ?? 0;
+    const window = buildMonthlyQuotaWindow(provider, spend, limit, now);
+    if (window) {
+      snaps[provider] = aggregateProviderUVI(provider, [window], now);
+    }
+  }
+
+  const hot = Object.values(snaps).filter((s) => s.status === "stressed" || s.status === "critical");
   if (hot.length === 0) return "";
   const parts = hot.map((s) => `${s.provider}=${s.uvi.toFixed(2)} ${s.status}`);
   return ` | uvi: ${parts.join(", ")}`;
@@ -1426,30 +1446,41 @@ export default function (pi: ExtensionAPI) {
         }
         if (action === "disable") {
           quotaCache.setEnabled(false);
+          // Clear only subscription utilization; per-token UVI is independent
           budgetTracker.setUtilization({});
-          ctx.ui.notify("UVI disabled.", "info");
+          syncUtilizationIntoBudget();
+          ctx.ui.notify("UVI disabled. Per-token provider UVI (monthly budget) is unaffected.", "info");
           return;
         }
         if (action === "refresh") {
-          if (!quotaCache.isEnabled()) {
-            ctx.ui.notify("UVI is disabled. Enable it first with /auto-router uvi enable (or set AUTO_ROUTER_UVI=1).", "warning");
+          const subscriptionEnabled = quotaCache.isEnabled();
+          const perTokenCount = getPerTokenProviders().length;
+          if (!subscriptionEnabled && perTokenCount === 0) {
+            ctx.ui.notify("UVI is disabled and no per-token providers configured. Enable with /auto-router uvi enable (or set AUTO_ROUTER_UVI=1).", "warning");
             return;
           }
           ctx.ui.notify("Refreshing UVI snapshots...", "info");
-          await quotaCache.refreshNow();
+          if (subscriptionEnabled) await quotaCache.refreshNow();
+          if (perTokenCount > 0) { balanceLastRefreshAt = 0; await refreshBalances(); }
           syncUtilizationIntoBudget();
           const lines = formatUtilizationLines(quotaCache);
-          ctx.ui.notify(lines.length > 0 ? ["UVI snapshot:", ...lines].join("\n") : "UVI: no snapshots (no OAuth providers found in auth.json?)", "info");
+          ctx.ui.notify(lines.length > 0 ? ["UVI snapshot:", ...lines].join("\n") : "UVI: no snapshots (no providers with quota/balance data)", "info");
           return;
         }
         // show (default)
         const lines = formatUtilizationLines(quotaCache);
-        const status = quotaCache.isEnabled() ? "enabled" : "disabled";
-        const header = `UVI (${status}):`;
+        const subscriptionEnabled = quotaCache.isEnabled();
+        const perTokenCount = getPerTokenProviders().length;
+        const statusLabel = subscriptionEnabled
+          ? (perTokenCount > 0 ? "enabled (+ per-token)" : "enabled")
+          : (perTokenCount > 0 ? "enabled (per-token only)" : "disabled");
+        const header = `UVI (${statusLabel}):`;
         if (lines.length === 0) {
-          const hint = quotaCache.isEnabled()
+          const hint = subscriptionEnabled
             ? "No snapshots yet. Try /auto-router uvi refresh."
-            : "Set AUTO_ROUTER_UVI=1 or run /auto-router uvi enable to start polling.";
+            : (perTokenCount > 0
+              ? "No per-token data yet. Set a monthly budget and send a prompt, then try /auto-router uvi refresh."
+              : "Set AUTO_ROUTER_UVI=1 or run /auto-router uvi enable to start polling.");
           ctx.ui.notify(`${header}\n  ${hint}`, "info");
           return;
         }
