@@ -2,11 +2,15 @@ export type Tier = "reasoning" | "swe" | "long" | "economy" | "vision";
 
 export type ContextClassification = "short" | "medium" | "long" | "epic";
 
+export type BillingModel = "subscription" | "per-token";
+
 export type RouteTarget = {
   provider: string;
   modelId: string;
   authProvider?: string;
   label: string;
+  billing?: BillingModel;
+  balanceEndpoint?: string;
 };
 
 export type Message = {
@@ -14,9 +18,22 @@ export type Message = {
   content: unknown;
 };
 
+export type BalanceState = {
+  provider: string;
+  currency: string;
+  totalBalance: number;
+  grantedBalance: number;
+  toppedUpBalance: number;
+  fetchedAt: number;
+  error?: string;
+};
+
 export type BudgetState = {
   dailySpend: Record<string, number>;
   dailyLimit: Record<string, number>;
+  monthlySpend?: Record<string, number>;
+  monthlyLimit?: Record<string, number>;
+  balances?: Record<string, BalanceState>;
   utilization?: Record<string, UtilizationSnapshot>;
 };
 

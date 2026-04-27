@@ -52,6 +52,12 @@
           "label": "Gemini 3.1 Pro"
         },
         {
+          "provider": "deepseek",
+          "modelId": "deepseek-chat",
+          "label": "DeepSeek V3 (direct)",
+          "billing": "per-token"
+        },
+        {
           "provider": "nvidia",
           "modelId": "deepseek-ai/deepseek-v3.2",
           "label": "DeepSeek v3.2 via NVIDIA"
@@ -80,6 +86,7 @@
       "google-antigravity/gemini-3-flash"
     ],
     "deepseek": [
+      "deepseek/deepseek-chat",
       "nvidia/deepseek-ai/deepseek-v3.2"
     ],
     "nvidia": [

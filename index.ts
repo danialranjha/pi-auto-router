@@ -23,7 +23,9 @@ import { getProviderHealthCache } from "./src/health-check.ts";
 import { LatencyTracker } from "./src/latency-tracker.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
-import type { RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot } from "./src/types.ts";
+import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
+import { aggregateProviderUVI } from "./src/uvi.ts";
+import type { RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow } from "./src/types.ts";
 
 const PROVIDER_ID = "auto-router";
 const AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
@@ -34,6 +36,8 @@ type RouteTarget = {
   modelId: string;
   authProvider?: string;
   label: string;
+  billing?: "subscription" | "per-token";
+  balanceEndpoint?: string;
 };
 
 type RouteDefinition = {
@@ -67,6 +71,9 @@ const budgetTracker = new BudgetTracker();
 const quotaCache = new QuotaCache();
 const latencyTracker = new LatencyTracker();
 const feedbackTracker = new FeedbackTracker();
+const balanceCache = new Map<string, BalanceState>();
+let balanceLastRefreshAt = 0;
+const BALANCE_REFRESH_INTERVAL_MS = 60_000;
 
 // Shadow mode: run full pipeline but use legacy ordering for actual routing.
 let shadowMode = envShadowEnabled();
@@ -88,19 +95,100 @@ function envShadowEnabled(): boolean {
 }
 
 function syncUtilizationIntoBudget(): void {
-  if (!quotaCache.isEnabled()) return;
-  const snapshots = quotaCache.getAllSnapshots();
-  // Re-key snapshots by route-config provider names so auditBudget(provider) lookups work.
   const remapped: Record<string, UtilizationSnapshot> = {};
-  for (const [oauthId, snap] of Object.entries(snapshots)) {
-    remapped[oauthId] = snap;
-    if (oauthId === "anthropic") remapped["claude-agent-sdk"] = snap;
+
+  // Subscription UVI (only when enabled)
+  if (quotaCache.isEnabled()) {
+    const snapshots = quotaCache.getAllSnapshots();
+    for (const [oauthId, snap] of Object.entries(snapshots)) {
+      remapped[oauthId] = snap;
+      if (oauthId === "anthropic") remapped["claude-agent-sdk"] = snap;
+    }
   }
-  budgetTracker.setUtilization(remapped);
+
+  // Per-token provider UVI windows — always computed, independent of subscription UVI toggle
+  const now = Date.now();
+  for (const [provider, balance] of balanceCache) {
+    if (balance.error) continue;
+    const monthlyLimit = budgetTracker.getMonthlyLimits();
+    const limit = monthlyLimit[provider];
+    if (!limit || limit <= 0) continue;
+    const monthlySpend = budgetTracker.getMonthlySpend()[provider] ?? 0;
+    const window = buildMonthlyQuotaWindow(provider, monthlySpend, limit, now);
+    if (window) {
+      const snap = aggregateProviderUVI(provider, [window], now);
+      remapped[provider] = snap;
+    }
+  }
+
+  if (Object.keys(remapped).length > 0) {
+    budgetTracker.setUtilization(remapped);
+  }
+}
+
+function getPerTokenProviders(): Array<{ provider: string; authProvider?: string; balanceEndpoint?: string }> {
+  const seen = new Set<string>();
+  const result: Array<{ provider: string; authProvider?: string; balanceEndpoint?: string }> = [];
+  for (const route of Object.values(routesCache)) {
+    for (const target of route.targets) {
+      if (target.billing !== "per-token") continue;
+      if (seen.has(target.provider)) continue;
+      seen.add(target.provider);
+      result.push({ provider: target.provider, authProvider: target.authProvider, balanceEndpoint: target.balanceEndpoint });
+    }
+  }
+  return result;
+}
+
+async function refreshBalances(): Promise<void> {
+  const now = Date.now();
+  if (now - balanceLastRefreshAt < BALANCE_REFRESH_INTERVAL_MS) return;
+  balanceLastRefreshAt = now;
+
+  const perToken = getPerTokenProviders();
+  if (perToken.length === 0) return;
+
+  const auth = readAuth();
+  const providersWithKeys = perToken
+    .filter((p) => {
+      const key = p.authProvider ? auth[p.authProvider]?.access : auth[p.provider]?.access;
+      return !!key;
+    })
+    .map((p) => ({
+      provider: p.provider,
+      apiKey: (p.authProvider ? auth[p.authProvider]?.access : auth[p.provider]?.access)!,
+      balanceEndpoint: p.balanceEndpoint,
+    }));
+
+  if (providersWithKeys.length === 0) return;
+
+  try {
+    const balances = await fetchAllBalances(providersWithKeys);
+    for (const [provider, state] of Object.entries(balances)) {
+      balanceCache.set(provider, state);
+    }
+  } catch {
+    // Best-effort; never block routing on balance fetch failures.
+  }
 }
 
 function formatUtilizationLines(cache: QuotaCache): string[] {
   const snapshots = cache.getAllSnapshots();
+  // Merge in per-token UVI from balance cache
+  const now = Date.now();
+  const monthlyLimit = budgetTracker.getMonthlyLimits();
+  const monthlySpend = budgetTracker.getMonthlySpend();
+  for (const [provider, balance] of balanceCache) {
+    if (balance.error) continue;
+    const limit = monthlyLimit[provider];
+    if (!limit || limit <= 0) continue;
+    const spend = monthlySpend[provider] ?? 0;
+    const window = buildMonthlyQuotaWindow(provider, spend, limit, now);
+    if (window) {
+      const snap = aggregateProviderUVI(provider, [window], now);
+      snapshots[provider] = snap;
+    }
+  }
   const entries = Object.entries(snapshots);
   if (entries.length === 0) return [];
   return entries.map(([provider, snap]) => {
@@ -220,6 +308,10 @@ function getTargetKey(target: RouteTarget | undefined | null): string {
   return `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
 }
 
+function getTargetBilling(target: RouteTarget): BillingModel {
+  return target.billing ?? "subscription";
+}
+
 function describeTarget(target: RouteTarget | undefined | null): string {
   if (!target) return "unknown target";
   return `${target.label || "Unknown"} [${target.provider || "unknown"}/${target.modelId || "unknown"}]`;
@@ -232,7 +324,9 @@ function validateRouteTarget(target: unknown): target is RouteTarget {
     typeof candidate.provider === "string" && candidate.provider.trim().length > 0 &&
     typeof candidate.modelId === "string" && candidate.modelId.trim().length > 0 &&
     typeof candidate.label === "string" && candidate.label.trim().length > 0 &&
-    (candidate.authProvider === undefined || typeof candidate.authProvider === "string")
+    (candidate.authProvider === undefined || typeof candidate.authProvider === "string") &&
+    (candidate.billing === undefined || candidate.billing === "subscription" || candidate.billing === "per-token") &&
+    (candidate.balanceEndpoint === undefined || typeof candidate.balanceEndpoint === "string")
   );
 }
 
@@ -766,6 +860,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       loadRoutesConfig();
       await ensureBudgetLoaded();
       quotaCache.refreshIfStale();
+      refreshBalances();
       syncUtilizationIntoBudget();
 
       const userMsg = extractLastUserText(context);
@@ -907,8 +1002,13 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       if (latAvg !== null) {
         reasoningParts.push(`avg latency ${(latAvg / 1000).toFixed(1)}s`);
       }
-      const selectedLimit = budgetState.dailyLimit?.[targets[0].provider];
-      const selectedSpend = budgetState.dailySpend?.[targets[0].provider] ?? 0;
+      const billing = getTargetBilling(targets[0]);
+      const selectedLimit = billing === "per-token"
+        ? budgetState.monthlyLimit?.[targets[0].provider]
+        : budgetState.dailyLimit?.[targets[0].provider];
+      const selectedSpend = billing === "per-token"
+        ? (budgetState.monthlySpend?.[targets[0].provider] ?? 0)
+        : (budgetState.dailySpend?.[targets[0].provider] ?? 0);
       const budgetRemaining = typeof selectedLimit === "number" && selectedLimit > 0
         ? Math.max(0, selectedLimit - selectedSpend)
         : 0;
@@ -936,6 +1036,9 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           if (result.lastMessage?.usage) {
             try {
               await budgetTracker.recordUsage(target.provider, result.lastMessage.usage);
+              if (getTargetBilling(target) === "per-token") {
+                await budgetTracker.recordMonthlyUsage(target.provider, result.lastMessage.usage);
+              }
             } catch {
               // ignore - never fail a successful response on stats write error
             }
@@ -1354,6 +1457,62 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      if (subcommand === "balance") {
+        const [actionRaw] = remainder ? remainder.split(/\s+/) : [];
+        const action = String(actionRaw ?? "show").toLowerCase();
+        if (action === "fetch" || action === "refresh") {
+          balanceLastRefreshAt = 0;
+          await refreshBalances();
+          syncUtilizationIntoBudget();
+        }
+        // show (default)
+        const perToken = getPerTokenProviders();
+        if (perToken.length === 0) {
+          ctx.ui.notify("No per-token providers configured. Add `\"billing\": \"per-token\"` to a route target.", "info");
+          return;
+        }
+        const lines: string[] = [];
+        for (const { provider } of perToken) {
+          const balance = balanceCache.get(provider);
+          const monthlyLimit = budgetTracker.getMonthlyLimits()[provider];
+          const monthlySpend = budgetTracker.getMonthlySpend()[provider] ?? 0;
+          const limitText = monthlyLimit ? `$${monthlyLimit.toFixed(2)}` : "none";
+          const pctText = monthlyLimit ? ` (${Math.round((monthlySpend / monthlyLimit) * 100)}% used)` : "";
+          if (balance && !balance.error) {
+            lines.push(`  ${provider.padEnd(22)} balance $${balance.totalBalance.toFixed(2)} ${balance.currency} | topped-up $${balance.toppedUpBalance.toFixed(2)} | budget ${limitText} | spent $${monthlySpend.toFixed(2)}${pctText}`);
+          } else if (balance?.error) {
+            lines.push(`  ${provider.padEnd(22)} [fetch error: ${balance.error}] | budget ${limitText} | spent $${monthlySpend.toFixed(2)}${pctText}`);
+          } else {
+            lines.push(`  ${provider.padEnd(22)} [not fetched yet] | budget ${limitText} | spent $${monthlySpend.toFixed(2)}${pctText}`);
+          }
+        }
+        const uviLines = (() => {
+          const snaps = balanceCache.size > 0 ? Object.fromEntries(
+            [...balanceCache.entries()].filter(([, b]) => !b.error).map(([provider]) => {
+              const limit = budgetTracker.getMonthlyLimits()[provider];
+              if (!limit) return [];
+              const spend = budgetTracker.getMonthlySpend()[provider] ?? 0;
+              const window = buildMonthlyQuotaWindow(provider, spend, limit);
+              if (!window) return [];
+              const snap = aggregateProviderUVI(provider, [window]);
+              return [provider, snap];
+            }).filter((x) => x.length > 0)
+          ) : {};
+          return Object.entries(snaps).map(([provider, snap]) => {
+            return `  ${provider.padEnd(22)} UVI=${snap.uvi.toFixed(2).padStart(5)} ${snap.status.padEnd(8)} | monthly@${Math.round((budgetTracker.getMonthlySpend()[provider] ?? 0) / (budgetTracker.getMonthlyLimits()[provider] ?? 1) * 100)}%`;
+          });
+        })();
+        ctx.ui.notify([
+          "Per-token provider balances:",
+          ...lines,
+          ...(uviLines.length > 0 ? ["", "Monthly UVI:", ...uviLines] : []),
+          "",
+          "Subcommands: show | fetch (refresh)",
+          "Set monthly budget: /auto-router budget set <provider> <usd> monthly",
+        ].join("\n"), "info");
+        return;
+      }
+
       if (subcommand === "budget") {
         await ensureBudgetLoaded();
         const [actionRaw, ...restArgs] = remainder ? remainder.split(/\s+/) : [];
@@ -1361,17 +1520,32 @@ export default function (pi: ExtensionAPI) {
         if (action === "show" || action === "" || !actionRaw) {
           const summary = budgetTracker.getDailySummary();
           const day = todayKey();
-          if (summary.length === 0) {
-            ctx.ui.notify(`No budget activity yet for ${day}. Set a limit with: /auto-router budget set <provider> <usd>`, "info");
-            return;
-          }
-          const lines = summary.map((s) => {
+          const mon = monthKey();
+          const lines: string[] = [];
+          const seen = new Set<string>();
+          for (const s of summary) {
+            seen.add(s.provider);
             const limitText = typeof s.limitUsd === "number" ? `limit $${s.limitUsd.toFixed(2)}` : "no limit";
             const ratio = typeof s.limitUsd === "number" && s.limitUsd > 0 ? ` (${Math.round((s.estimatedCost / s.limitUsd) * 100)}%)` : "";
-            return `  ${s.provider.padEnd(22)} spend $${s.estimatedCost.toFixed(2)} | in ${s.inputTokens} | out ${s.outputTokens} | ${limitText}${ratio}`;
-          });
+            lines.push(`  ${s.provider.padEnd(22)} spend $${s.estimatedCost.toFixed(2)} | in ${s.inputTokens} | out ${s.outputTokens} | ${limitText}${ratio}`);
+          }
+          // Add monthly providers
+          const monthlyLimits = budgetTracker.getMonthlyLimits();
+          const monthlySpend = budgetTracker.getMonthlySpend();
+          for (const [provider, limit] of Object.entries(monthlyLimits)) {
+            if (seen.has(provider)) continue;
+            seen.add(provider);
+            const spend = monthlySpend[provider] ?? 0;
+            const ratio = limit > 0 ? ` (${Math.round((spend / limit) * 100)}%)` : "";
+            const monthlyStats = budgetTracker.getMonthlyProviderStats(provider);
+            lines.push(`  ${provider.padEnd(22)} spend $${spend.toFixed(2)} | in ${monthlyStats.inputTokens} | out ${monthlyStats.outputTokens} | monthly limit $${limit.toFixed(2)}${ratio}`);
+          }
+          if (lines.length === 0) {
+            ctx.ui.notify(`No budget activity yet for ${day} (daily) / ${mon} (monthly). Set a limit with: /auto-router budget set <provider> <usd> [monthly]`, "info");
+            return;
+          }
           const uviLines = formatUtilizationLines(quotaCache);
-          const out = [`Auto-router budget for ${day}:`, ...lines];
+          const out = [`Auto-router budget for ${day} (daily) / ${mon} (monthly):`, ...lines];
           if (uviLines.length > 0) {
             out.push("", "UVI (utilization velocity):", ...uviLines);
           } else if (quotaCache.isEnabled()) {
@@ -1386,25 +1560,37 @@ export default function (pi: ExtensionAPI) {
         if (action === "set") {
           const provider = restArgs[0];
           const amount = Number(restArgs[1]);
+          const maybeMonthly = String(restArgs[2] ?? "").toLowerCase();
           if (!provider || !Number.isFinite(amount) || amount <= 0) {
-            ctx.ui.notify("Usage: /auto-router budget set <provider> <dailyUsd>", "error");
+            ctx.ui.notify("Usage: /auto-router budget set <provider> <usd> [monthly]", "error");
             return;
           }
-          await budgetTracker.setDailyLimit(provider, amount);
-          ctx.ui.notify(`Set daily budget for ${provider} = $${amount.toFixed(2)}`, "info");
+          if (maybeMonthly === "monthly") {
+            await budgetTracker.setMonthlyLimit(provider, amount);
+            ctx.ui.notify(`Set monthly budget for ${provider} = $${amount.toFixed(2)}`, "info");
+          } else {
+            await budgetTracker.setDailyLimit(provider, amount);
+            ctx.ui.notify(`Set daily budget for ${provider} = $${amount.toFixed(2)}`, "info");
+          }
           return;
         }
         if (action === "clear") {
           const provider = restArgs[0];
+          const maybeMonthly = String(restArgs[1] ?? "").toLowerCase();
           if (!provider) {
-            ctx.ui.notify("Usage: /auto-router budget clear <provider>", "error");
+            ctx.ui.notify("Usage: /auto-router budget clear <provider> [monthly]", "error");
             return;
           }
-          await budgetTracker.clearDailyLimit(provider);
-          ctx.ui.notify(`Cleared daily budget for ${provider}`, "info");
+          if (maybeMonthly === "monthly") {
+            await budgetTracker.clearMonthlyLimit(provider);
+            ctx.ui.notify(`Cleared monthly budget for ${provider}`, "info");
+          } else {
+            await budgetTracker.clearDailyLimit(provider);
+            ctx.ui.notify(`Cleared daily budget for ${provider}`, "info");
+          }
           return;
         }
-        ctx.ui.notify("Usage: /auto-router budget [show|set <provider> <usd>|clear <provider>]", "error");
+        ctx.ui.notify("Usage: /auto-router budget [show|set <provider> <usd> [monthly]|clear <provider> [monthly]]", "error");
         return;
       }
 
@@ -1558,7 +1744,8 @@ export default function (pi: ExtensionAPI) {
         "/auto-router models",
         "/auto-router explain [routeId]",
         "/auto-router shortcuts",
-        "/auto-router budget [show|set <provider> <usd>|clear <provider>]",
+        "/auto-router balance [show|fetch]",
+        "/auto-router budget [show|set <provider> <usd> [monthly]|clear <provider> [monthly]]",
         "/auto-router uvi [show|enable|disable|refresh]",
         "/auto-router shadow [show|enable|disable]",
         "/auto-router rate <good|bad> [reason]",

@@ -10,7 +10,7 @@ describe("BudgetTracker", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-router-budget-"));
     const tracker = new BudgetTracker(join(dir, "stats.json"));
     await tracker.load();
-    assert.deepEqual(tracker.getBudgetState(), { dailySpend: {}, dailyLimit: {} });
+    assert.deepEqual(tracker.getBudgetState(), { dailySpend: {}, dailyLimit: {}, monthlySpend: {}, monthlyLimit: {} });
   });
 
   it("records usage and accumulates spend", async () => {
@@ -45,7 +45,7 @@ describe("BudgetTracker", () => {
     await writeFile(path, "{not-json", "utf8");
     const tracker = new BudgetTracker(path);
     await tracker.load();
-    assert.deepEqual(tracker.getBudgetState(), { dailySpend: {}, dailyLimit: {} });
+    assert.deepEqual(tracker.getBudgetState(), { dailySpend: {}, dailyLimit: {}, monthlySpend: {}, monthlyLimit: {} });
   });
 
   it("writes a versioned json file", async () => {
@@ -54,7 +54,7 @@ describe("BudgetTracker", () => {
     const tracker = new BudgetTracker(path);
     await tracker.recordUsage("claude-agent-sdk", { input: 7, output: 8, cost: { total: 0 } }, "2026-04-25");
     const raw = JSON.parse(await readFile(path, "utf8"));
-    assert.equal(raw.version, 1);
+    assert.equal(raw.version, 2);
     assert.ok(raw.daily["2026-04-25"]);
   });
 
