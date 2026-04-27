@@ -440,6 +440,8 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | `uvi.ts`                  | Computes UVI from quota windows (`consumed_fraction / elapsed_fraction`); classifies as `critical`, `stressed`, `ok`, or `surplus` |
 | `quota-fetcher.ts`        | Pulls real-time usage data from OpenAI, Anthropic, and Google OAuth quota APIs; token refresh + error handling |
 | `quota-cache.ts`          | TTL-gated cache for quota snapshots; batches fetches, emits per-provider `UtilizationSnapshot`       |
+| `health-check.ts`         | Provider health cache — verifies OAuth tokens; independent of UVI; feeds `isHealthy` into constraint solver |
+| `candidate-partitioner.ts`| Partitions candidates into `[promoted, normal, demoted]` buckets based on budget audit + UVI; supports hard mode exclusion |
 
 `index.ts` wires these together inside `streamAutoRouter`:
 

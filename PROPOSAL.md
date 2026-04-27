@@ -4,7 +4,7 @@
 Transform `pi-auto-router` from a static target selector into a dynamic decision engine that analyzes context, intent, and budgets to select the optimal model.
 
 ## Current State
-Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **shipped**. 105/105 tests pass.
+Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **shipped**. Tier 1 enhancements (health checks, shadow mode, UVI hard mode) are **shipped**. 111/111 tests pass.
 
 ### ✅ Completed
 - Static route definitions with ordered failover chains
@@ -14,6 +14,9 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
 - Constraint solving (vision, reasoning, context window requirements)
 - Budget tracking (daily spend, limits, persistent stats)
 - Utilization Velocity Index (UVI) — real-time OAuth quota monitoring with promote/demote/block
+- Provider health checks — auth token verification with TTL cache, filters unhealthy providers before routing
+- UVI hard mode — `AUTO_ROUTER_UVI_HARD=1` excludes stressed providers entirely
+- Shadow mode — `AUTO_ROUTER_SHADOW=1` runs pipeline without changing routing, for safe rollout
 - Cooldown/retry logic for rate limits, quota exhaustion, auth failures
 - Context sanitization (`toolCall.id`, `toolResult.name`, `tool_call_id` fixes)
 - Stream error resilience, model registry fallback, stale context guard
@@ -83,7 +86,7 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
 ### Housekeeping
 | # | Feature | Effort |
 |---|---------|--------|
-| 8 | **Update README route names** — replace old `subscription-premium`/`subscription-coding` with actual route names; add helpful error when user requests non-existent route | Low |
+| 8 | **Update README route names** — replace old `subscription-premium`/`subscription-coding` with actual route names; add helpful error when user requests non-existent route | Low | ✅ |
 
 ## Success Metrics
 - ✅ Zero regressions in existing failover behavior
