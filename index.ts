@@ -22,6 +22,7 @@ import { QuotaCache, mapRouteProviderToOAuth } from "./src/quota-cache.ts";
 import { getProviderHealthCache } from "./src/health-check.ts";
 import { LatencyTracker } from "./src/latency-tracker.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
+import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import type { RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot } from "./src/types.ts";
 
 const PROVIDER_ID = "auto-router";
@@ -65,6 +66,7 @@ const lastBudgetWarningByRoute = new Map<string, string>();
 const budgetTracker = new BudgetTracker();
 const quotaCache = new QuotaCache();
 const latencyTracker = new LatencyTracker();
+const feedbackTracker = new FeedbackTracker();
 
 // Shadow mode: run full pipeline but use legacy ordering for actual routing.
 let shadowMode = envShadowEnabled();
@@ -116,6 +118,7 @@ async function ensureBudgetLoaded(): Promise<void> {
   try {
     await budgetTracker.load();
     latencyTracker.load();
+    feedbackTracker.load();
   } catch {
     // ignore - tracker resets to defaults internally
   }
@@ -1236,6 +1239,7 @@ export default function (pi: ExtensionAPI) {
         lastShadowByRoute.clear();
         getProviderHealthCache().clear();
         latencyTracker.clear();
+        feedbackTracker.clear();
         updateUi(ctx);
         ctx.ui.notify("Auto-router cooldowns, decision history, and health cache reset", "success");
         return;
@@ -1272,6 +1276,40 @@ export default function (pi: ExtensionAPI) {
           }
           ctx.ui.notify(lines.join("\n"), "info");
         }
+        return;
+      }
+
+      if (subcommand === "rate") {
+        const [ratingRaw, ...reasonParts] = remainder ? remainder.split(/\s+/) : [];
+        const rating = String(ratingRaw ?? "").toLowerCase();
+        if (rating !== "good" && rating !== "bad") {
+          ctx.ui.notify("Usage: /auto-router rate <good|bad> [reason]", "error");
+          return;
+        }
+        const lastDecision = lastDecisionByRoute.values().next().value as RoutingDecision | undefined;
+        // Find the most recent decision across all routes
+        let recentDecision: RoutingDecision | undefined;
+        for (const d of lastDecisionByRoute.values()) {
+          recentDecision = d; // last inserted wins
+        }
+        if (!recentDecision) {
+          ctx.ui.notify("No routing decision to rate yet. Send a prompt first.", "warning");
+          return;
+        }
+        const reason = reasonParts.length > 0 ? reasonParts.join(" ") : undefined;
+        feedbackTracker.record({
+          provider: recentDecision.target.provider,
+          modelId: recentDecision.target.modelId,
+          routeId: recentDecision.target.provider, // use provider as route context
+          rating: rating as "good" | "bad",
+          reason,
+          tier: recentDecision.tier,
+          timestamp: Date.now(),
+        });
+        try { feedbackTracker.save(); } catch { /* ignore */ }
+        const emoji = rating === "good" ? "👍" : "👎";
+        const reasonSuffix = reason ? ` (${reason})` : "";
+        ctx.ui.notify(`${emoji} Rated ${recentDecision.target.label} as ${rating}${reasonSuffix}`, "success");
         return;
       }
 
@@ -1382,11 +1420,17 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         const shortcut = lastShortcutByRoute.get(routeId);
+        const providerStats = feedbackTracker.getProviderStats();
+        const ps = providerStats[decision.target.provider];
+        const ratingLine = ps
+          ? `  ratings:    ${ps.good}👍 ${ps.bad}👎 (${ps.total} total, ${ps.total > 0 ? ((ps.good / ps.total) * 100).toFixed(0) : 0}% good)`
+          : `  ratings:    none yet`;
         const lines = [
           `Last routing decision for ${routeId}:`,
           `  phase:      ${decision.phase}`,
           `  tier:       ${decision.tier}`,
           `  target:     ${describeTarget(decision.target)}`,
+          ratingLine,
           `  confidence: ${decision.metadata.confidence.toFixed(2)}`,
           `  est tokens: ${decision.metadata.estimatedTokens}`,
           shortcut ? `  shortcut:   ${shortcut.shortcut} (tier=${shortcut.tier})` : `  shortcut:   none`,
@@ -1517,6 +1561,7 @@ export default function (pi: ExtensionAPI) {
         "/auto-router budget [show|set <provider> <usd>|clear <provider>]",
         "/auto-router uvi [show|enable|disable|refresh]",
         "/auto-router shadow [show|enable|disable]",
+        "/auto-router rate <good|bad> [reason]",
         "/auto-router test-resolve <provider/modelId>",
         "/auto-router debug",
         "/auto-router reload",

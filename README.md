@@ -380,6 +380,19 @@ Providers with no latency history sort last within their bucket (cold start). Da
 
 View latency data in `/auto-router list` (shows per-target ⏱ avg) and `/auto-router explain` (includes avg latency in reasoning). Reset with `/auto-router reset`.
 
+## User feedback
+
+Rate routing decisions to help improve selection over time:
+
+```text
+/auto-router rate good
+/auto-router rate bad
+/auto-router rate good "fast and accurate"
+/auto-router rate bad "too verbose"
+```
+
+Ratings are persisted in `~/.pi/agent/extensions/auto-router.ratings.json`. Per-provider stats appear in `/auto-router explain` (e.g. `ratings: 12👍 3👎 (15 total, 80% good)`). Reset with `/auto-router reset`.
+
 ## Status line
 
 The status line surfaces routing state at a glance:
@@ -477,6 +490,7 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | `candidate-partitioner.ts`| Partitions candidates into `[promoted, normal, demoted]` buckets based on budget audit + UVI; supports hard mode exclusion |
 | `latency-tracker.ts`      | Tracks per-provider request latency (rolling average, max 100 samples); used for performance-based ranking within UVI buckets |
 | `intent-classifier.ts`    | Heuristic intent classifier (code/creative/analysis/general); maps to tier hints when no @ shortcut is used |
+| `feedback-tracker.ts`    | User ratings of routing decisions (`/auto-router rate`); persists to auto-router.ratings.json; per-provider stats |
 
 `index.ts` wires these together inside `streamAutoRouter`:
 
