@@ -154,11 +154,20 @@ describe("buildStrategyRules", () => {
     assert.equal(rules.length, 1);
     assert.equal(rules[0].name, "test-tier");
     assert.equal(rules[0].priority, 1);
+    assert.equal(rules[0].routeId, undefined);
     // Condition should always match (no condition filter)
     assert.equal(rules[0].condition(ctx), true);
     const hints = rules[0].action(ctx);
     assert.ok(hints);
     assert.equal(hints!.tierOverride, "reasoning");
+  });
+
+  it("stamps routeId onto generated rules when provided", () => {
+    const configs: PolicyRuleConfig[] = [
+      { name: "scoped", priority: 1, type: "force-tier", tier: "fast" },
+    ];
+    const rules = buildStrategyRules(configs, "subscription-premium");
+    assert.equal(rules[0].routeId, "subscription-premium");
   });
 
   it("builds a prefer-provider rule (string)", () => {
@@ -339,5 +348,54 @@ describe("PolicyEngine evaluateStrategy", () => {
     engine.reset();
     assert.equal(engine.getLastDecision(), null);
     assert.equal(engine.getLastHints(), null);
+  });
+
+  it("fires global rules (routeId=undefined) for any route", () => {
+    const ctxA: RoutingContext = { ...ctx, routeId: "route-a" };
+    const ctxB: RoutingContext = { ...ctx, routeId: "route-b" };
+    const engine = new PolicyEngine({
+      strategyRules: [
+        { name: "global", priority: 1, routeId: undefined, condition: () => true, action: () => ({ tierOverride: "fast" }) },
+      ],
+    });
+    assert.equal(engine.evaluateStrategy(ctxA)!.tierOverride, "fast");
+    assert.equal(engine.evaluateStrategy(ctxB)!.tierOverride, "fast");
+  });
+
+  it("scopes route-specific rules to their route only", () => {
+    const ctxA: RoutingContext = { ...ctx, routeId: "route-a" };
+    const ctxB: RoutingContext = { ...ctx, routeId: "route-b" };
+    const engine = new PolicyEngine({
+      strategyRules: [
+        { name: "only-a", priority: 1, routeId: "route-a", condition: () => true, action: () => ({ tierOverride: "reasoning" }) },
+        { name: "only-b", priority: 1, routeId: "route-b", condition: () => true, action: () => ({ tierOverride: "fast" }) },
+      ],
+    });
+    assert.equal(engine.evaluateStrategy(ctxA)!.tierOverride, "reasoning");
+    assert.equal(engine.evaluateStrategy(ctxB)!.tierOverride, "fast");
+  });
+
+  it("mixes global and route-scoped rules correctly", () => {
+    const ctxA: RoutingContext = { ...ctx, routeId: "route-a" };
+    const engine = new PolicyEngine({
+      strategyRules: [
+        { name: "scoped", priority: 1, routeId: "route-a", condition: () => true, action: () => ({ forceReasoning: true }) },
+        { name: "global", priority: 2, condition: () => true, action: () => ({ tierOverride: "economy" }) },
+      ],
+    });
+    const hints = engine.evaluateStrategy(ctxA);
+    assert.ok(hints);
+    assert.equal(hints!.forceReasoning, true);
+    assert.equal(hints!.tierOverride, "economy");
+  });
+
+  it("returns null when no rules match the route", () => {
+    const ctxB: RoutingContext = { ...ctx, routeId: "route-b" };
+    const engine = new PolicyEngine({
+      strategyRules: [
+        { name: "only-a", priority: 1, routeId: "route-a", condition: () => true, action: () => ({ tierOverride: "reasoning" }) },
+      ],
+    });
+    assert.equal(engine.evaluateStrategy(ctxB), null);
   });
 });

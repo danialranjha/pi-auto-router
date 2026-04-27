@@ -10,6 +10,8 @@ export type PolicyEngineOptions = {
 export type StrategyRule = {
   name: string;
   priority: number;
+  /** If set, this rule only fires for the matching route ID. Undefined = global (all routes). */
+  routeId?: string;
   condition: (ctx: RoutingContext) => boolean;
   action: (ctx: RoutingContext) => RoutingHints | null;
 };
@@ -68,12 +70,15 @@ export class PolicyEngine {
   /**
    * Evaluate strategy rules in priority order. Merges hints from all matching rules
    * (later rules override earlier ones for conflicting keys). Returns null if no rules match.
+   * Only fires rules whose routeId is undefined (global) or matches the provided routeId.
    */
   evaluateStrategy(ctx: RoutingContext): RoutingHints | null {
     let merged: RoutingHints | null = null;
     let matchedRuleName: string | undefined;
 
     for (const rule of this.strategyRules) {
+      // Route scoping: skip rules that are scoped to a different route
+      if (rule.routeId !== undefined && rule.routeId !== ctx.routeId) continue;
       if (!rule.condition(ctx)) continue;
       const hints = rule.action(ctx);
       if (!hints) continue;
@@ -135,12 +140,14 @@ export function mergeHints(base: RoutingHints | null, incoming: RoutingHints): R
 
 /**
  * Build StrategyRule objects from JSON-serializable PolicyRuleConfig entries.
+ * If routeId is provided, all generated rules are scoped to that route.
  * These are meant to be loaded from auto-router.routes.json.
  */
-export function buildStrategyRules(configs: PolicyRuleConfig[]): StrategyRule[] {
+export function buildStrategyRules(configs: PolicyRuleConfig[], routeId?: string): StrategyRule[] {
   return configs.map((c) => ({
     name: c.name,
     priority: c.priority,
+    routeId,
     condition: buildCondition(c.condition),
     action: buildAction(c),
   }));

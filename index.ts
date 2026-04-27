@@ -23,7 +23,7 @@ import { getProviderHealthCache } from "./src/health-check.ts";
 import { LatencyTracker } from "./src/latency-tracker.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
-import { PolicyEngine, buildStrategyRules } from "./src/policy-engine.ts";
+import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import type { RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow, PolicyRuleConfig } from "./src/types.ts";
@@ -465,13 +465,15 @@ function loadRoutesConfig(): void {
   }
 }
 
-/** Rebuild the policy engine from all loaded route configs. */
+/** Rebuild the policy engine from all loaded route configs. Rules are scoped per-route. */
 function rebuildPolicyEngine(): void {
-  const allRules: PolicyRuleConfig[] = [];
-  for (const route of Object.values(routesCache)) {
-    if (route.policyRules) allRules.push(...route.policyRules);
+  const allRules: StrategyRule[] = [];
+  for (const [routeId, route] of Object.entries(routesCache)) {
+    if (route.policyRules) {
+      allRules.push(...buildStrategyRules(route.policyRules, routeId));
+    }
   }
-  policyEngine.rebuildStrategyRules(buildStrategyRules(allRules));
+  policyEngine.rebuildStrategyRules(allRules);
 }
 
 function normalizeModelToken(value: string): string {
