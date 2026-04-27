@@ -3,30 +3,28 @@
 ## Overview
 Transform `pi-auto-router` from a static target selector into a dynamic decision engine that analyzes context, intent, and budgets to select the optimal model.
 
-## Current State
-Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **shipped**. Tier 1 enhancements (health checks, shadow mode, UVI hard mode) are **shipped**. 111/111 tests pass.
+**Status:** ✅ Fully shipped. 146/146 tests pass. All phases complete.
 
-### ✅ Completed
+## Shipped Features
 - Static route definitions with ordered failover chains
 - Dynamic routing pipeline (Shortcut Parser → Context Analyzer → Constraint Solver → Budget Auditor → Selector)
 - `@` shortcut commands (`@reasoning`, `@swe`, `@long`, `@fast`, `@vision`)
 - Context-aware routing (token estimation, context classification, capability filtering)
 - Constraint solving (vision, reasoning, context window requirements)
 - Budget tracking (daily spend, limits, persistent stats)
-- Utilization Velocity Index (UVI) — real-time OAuth quota monitoring with promote/demote/block
-- Provider health checks — auth token verification with TTL cache, filters unhealthy providers before routing
-- UVI hard mode — `AUTO_ROUTER_UVI_HARD=1` excludes stressed providers entirely
-- Shadow mode — `AUTO_ROUTER_SHADOW=1` runs pipeline without changing routing, for safe rollout
-- Performance-based ranking — tracks per-provider TTFT latency; sorts candidates within UVI buckets by historical speed
-- Intent classification — heuristic keyword/pattern classifier (code/creative/analysis/general); maps to tier hints when no @ shortcut is used
-- User feedback loop — `/auto-router rate <good|bad> [reason]`; tracks per-provider ratings in auto-router.ratings.json
+- **Utilization Velocity Index (UVI)** — real-time OAuth quota monitoring with promote/demote/block
+- **Provider health checks** — auth token verification with TTL cache; filters unhealthy providers before routing
+- **Shadow mode** (`AUTO_ROUTER_SHADOW=1`) — run full pipeline without changing routing; safety net for new features
+- **UVI hard mode** (`AUTO_ROUTER_UVI_HARD=1`) — excludes stressed providers entirely; `🛡️ uvi-hard` in status line
+- **Performance-based ranking** — rolling average per-provider latency; sorts candidates within UVI buckets fastest-first
+- **Intent classification** — heuristic keyword/pattern classifier (code/creative/analysis/general); maps to tier hints
+- **User feedback loop** (`/auto-router rate <good|bad> [reason]`) — persists per-provider ratings
 - Cooldown/retry logic for rate limits, quota exhaustion, auth failures
-- Context sanitization (`toolCall.id`, `toolResult.name`, `tool_call_id` fixes)
-- Stream error resilience, model registry fallback, stale context guard
-- Status line, `/auto-router explain`, `/auto-router budget`, `/auto-router uvi`
-- All UI commands (`status`, `list`, `show`, `search`, `switch`, `aliases`, `reload`, `reset`, etc.)
+- Context sanitization, stream error resilience, model registry fallback, stale context guard
+- Status line with tier, budget warnings, UVI, health, shadow, and hard-mode indicators
+- All UI commands (`status`, `list`, `show`, `search`, `switch`, `aliases`, `explain`, `shortcuts`, `budget`, `uvi`, `shadow`, `rate`, `reload`, `reset`)
 
-## Target Architecture
+## Pipeline Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -39,57 +37,57 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
-    │  2. CONTEXT ANALYZER                         │  ✅
+    │  2. INTENT CLASSIFIER                        │  ✅
+    │     Heuristic: code, creative, analysis, gen │
+    └──────────────────────┬──────────────────────┘
+                           │
+    ┌──────────────────────▼──────────────────────┐
+    │  3. CONTEXT ANALYZER                         │  ✅
     │     Token count, history depth, classification │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
-    │  3. CONSTRAINT SOLVER                        │  ✅
-    │     vision? reasoning? max_tokens? cooldown? │
+    │  4. CONSTRAINT SOLVER                        │  ✅
+    │     vision? reasoning? ctx? cooldown? health?│
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
-    │  4. BUDGET AUDITOR                           │  ✅
+    │  5. BUDGET AUDITOR                           │  ✅
     │     USD limits + UVI dynamic reallocation    │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
-    │  5. SELECTOR                                   │  ✅
-    │     Partition → [promoted, normal, demoted]  │
+    │  6. SELECTOR                                   │  ✅
+    │     Partition → sort by latency → [promoted,  │
+    │     normal, demoted]                          │
     └─────────────────────────────────────────────┘
                            │
                            ▼
     ┌─────────────────────────────────────────────┐
-    │  6. TARGET EXECUTION                         │  ✅
+    │  7. TARGET EXECUTION                         │  ✅
     │     Sanitize → Stream → Failover on error    │
     └─────────────────────────────────────────────┘
 ```
 
-## Remaining Work
+## Module Map
 
-### Tier 1: Quick Wins
-| # | Feature | Effort | Impact |
-|---|---------|--------|--------|
-| 1 | **Provider health checks** — proactive auth verification before routing to avoid wasted failover attempts | Low | High | ✅ |
-| 2 | **Shadow mode** (`AUTO_ROUTER_SHADOW=1`) — run full pipeline without changing routing; safety net for new features | Low | Medium | ✅ |
-| 3 | **Hard-override env flag** for UVI surplus promotion — `AUTO_ROUTER_UVI_HARD=1` excludes demoted (stressed) providers entirely | Low | Low-Medium | ✅ |
-
-### Tier 2: High-Impact
-| # | Feature | Effort | Impact |
-|---|---------|--------|--------|
-| 4 | **Performance-based ranking** — track `(provider, tier, contextSize) → p50/p95` latency; rank candidates by historical speed | Medium | High | ✅ |
-| 5 | **Default-on for UVI** — flip the default after real-world validation | Low | Medium | ✅ |
-
-### All items complete 🎉
-| # | Feature | Effort | Impact |
-|---|---------|--------|--------|
-| 6 | **User feedback loop** (`/auto-router rate <good|bad>`) — learn from user ratings over time | Medium | Medium | ✅ |
-| 7 | **Intent classification** — classify prompts as code/creative/analysis to inform tier selection | Medium | Low-Medium | ✅ |
-
-### Housekeeping
-| # | Feature | Effort |
-|---|---------|--------|
-| 8 | **Update README route names** — replace old `subscription-premium`/`subscription-coding` with actual route names; add helpful error when user requests non-existent route | Low | ✅ |
+```
+src/types.ts                  — Shared types
+src/context-analyzer.ts       — Token estimation, context classification
+src/shortcut-parser.ts        — @ shortcut parsing
+src/constraint-solver.ts      — Capability/capability/health/cooldown filtering
+src/policy-engine.ts          — Rule registry skeleton
+src/budget-tracker.ts         — Daily spend persistence
+src/budget-auditor.ts         — USD + UVI constraint rules
+src/candidate-partitioner.ts  — Promote/normal/demote bucketing + hard mode
+src/uvi.ts                    — UVI math (compute, classify, aggregate)
+src/quota-fetcher.ts          — OAuth usage API clients (vendored from pi-usage-bars)
+src/quota-cache.ts            — TTL-gated quota snapshot cache
+src/health-check.ts           — Auth token health verification
+src/latency-tracker.ts        — Rolling avg per-provider latency
+src/intent-classifier.ts      — Heuristic intent classification
+src/feedback-tracker.ts       — User rating persistence
+```
 
 ## Success Metrics
 - ✅ Zero regressions in existing failover behavior
@@ -99,9 +97,4 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
 - ✅ Auth token expiration handled gracefully with failover
 - ✅ Provider validation errors sanitized before sending
 - ✅ All 5 route chains verified in non-interactive mode
-- ✅ Tier 1 features verified: shadow mode, UVI hard mode, health checks all pass with pi -p
-
-## Backward Compatibility
-- Routes config: all existing configs work unchanged
-- Failover loop: preserved as ultimate fallback when all targets exhaust
-- Commands: all existing commands work
+- ✅ All Tier 1–3 features verified end-to-end with pi -p
