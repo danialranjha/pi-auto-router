@@ -172,15 +172,16 @@ async function refreshBalances(): Promise<void> {
     .filter((p) => {
       const authKey = p.authProvider ?? p.provider;
       const entry = auth[authKey];
-      if (!entry?.access) {
-        balanceFetchErrors[p.provider] = `no API key in auth.json (checked "${authKey}")`;
-        return false;
-      }
-      return true;
+      if (entry?.access) return true;
+      // Fall back to environment variables
+      const envKey = resolveProviderApiKeyFromEnv(p.provider);
+      if (envKey) return true;
+      balanceFetchErrors[p.provider] = `no API key in auth.json (checked "${authKey}") or env`;
+      return false;
     })
     .map((p) => ({
       provider: p.provider,
-      apiKey: (p.authProvider ? auth[p.authProvider]?.access : auth[p.provider]?.access)!,
+      apiKey: (p.authProvider ? auth[p.authProvider]?.access : auth[p.provider]?.access) ?? resolveProviderApiKeyFromEnv(p.provider)!,
       balanceEndpoint: p.balanceEndpoint,
     }));
 
@@ -336,6 +337,20 @@ function getAccessToken(authProvider: string): string | undefined {
 function getTargetKey(target: RouteTarget | undefined | null): string {
   if (!target) return "unknown/unknown";
   return `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
+}
+
+/** Resolve an API key from environment variables for a given provider. */
+function resolveProviderApiKeyFromEnv(provider: string): string | undefined {
+  const candidates = [
+    `${provider.toUpperCase()}_API_KEY`,
+    `${provider.toUpperCase()}_KEY`,
+    `${provider.replace(/-/g, "_").toUpperCase()}_API_KEY`,
+  ];
+  for (const name of candidates) {
+    const val = process.env[name];
+    if (val) return val;
+  }
+  return undefined;
 }
 
 function getTargetBilling(target: RouteTarget): BillingModel {
