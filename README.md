@@ -150,6 +150,8 @@ Each route target supports:
 - `modelId` — model id under that provider
 - `label` — human-readable label
 - `authProvider` — optional auth provider lookup in `~/.pi/agent/auth.json`
+- `billing` — optional: `"per-token"` for pay-per-token endpoints (default: `"subscription"`)
+- `balanceEndpoint` — optional custom balance API URL (falls back to built-in registry)
 
 Use `authProvider` for providers whose OAuth/access token should be read from pi auth storage.
 Skip it for providers that authenticate internally or don’t require pi-managed tokens for the request path.
@@ -169,7 +171,8 @@ Skip it for providers that authenticate internally or don’t require pi-managed
 - `/auto-router models`
 - `/auto-router explain [routeId]` — show the last routing decision (tier, target, confidence, reasoning)
 - `/auto-router shortcuts` — list available `@` shortcuts
-- `/auto-router budget [show|set <provider> <usd>|clear <provider>]` — view/manage daily per-provider budgets
+- `/auto-router balance [show|fetch]` — view/fetch balances for pay-per-token providers
+- `/auto-router budget [show|set <provider> <usd> [monthly]|clear <provider> [monthly]]` — view/manage daily/monthly per-provider budgets
 - `/auto-router uvi [show|enable|disable|refresh]` — view/manage Utilization Velocity Index monitoring
 - `/auto-router shadow [show|enable|disable]` — run pipeline in shadow mode (log but don't change routing)
 - `/auto-router reload`
@@ -190,6 +193,9 @@ Skip it for providers that authenticate internally or don’t require pi-managed
 /auto-router shortcuts
 /auto-router budget show
 /auto-router budget set google-antigravity 5.00
+/auto-router budget set deepseek 20.00 monthly
+/auto-router balance show
+/auto-router balance fetch
 /auto-router uvi show
 /auto-router uvi enable
 /auto-router reload
@@ -232,13 +238,15 @@ The intent classification appears in `/auto-router explain` reasoning (e.g. `int
 
 ## Budgets
 
-`auto-router` tracks daily input/output tokens and estimated cost per provider, persisted at:
+`auto-router` tracks daily **and** monthly input/output tokens and estimated cost per provider, persisted at:
 
 ```text
 ~/.pi/agent/extensions/auto-router.stats.json
 ```
 
-When you set a daily limit, the budget auditor runs before each request:
+### Daily budgets (subscription providers)
+
+When you set a daily limit for a subscription provider, the budget auditor runs before each request:
 
 - **≥ 80% of limit** → soft warning (surfaces in routing reasoning and the status line)
 - **≥ 100% of limit** → that provider is excluded from the candidate set; routing falls back to the next allowed target
@@ -253,7 +261,35 @@ Manage budgets with:
 /auto-router budget clear openai-codex
 ```
 
-The selected target’s remaining daily budget is reported in `decision.metadata.budgetRemaining` and visible via `/auto-router explain`.
+### Monthly budgets (per-token providers)
+
+For pay-per-token providers like DeepSeek, set a **monthly** budget. The system auto-detects per-token providers when a monthly limit is set — no config tag needed:
+
+```text
+/auto-router budget set deepseek 20.00 monthly
+/auto-router budget clear deepseek monthly
+```
+
+The auditor uses the same thresholds (80% → warning, 100% → block) against monthly spend. Balance data is fetched from the provider's API (e.g. `GET https://api.deepseek.com/user/balance`) and API keys are resolved from `~/.pi/agent/auth.json` first, then environment variables (`DEEPSEEK_API_KEY`, `DEEPSEEK_KEY`).
+
+View balances with:
+
+```text
+/auto-router balance show
+/auto-router balance fetch
+```
+
+### UVI for per-token providers
+
+Per-token UVI is computed the same way as subscription UVI:
+
+```
+UVI = (monthly_spend / monthly_budget) / elapsed_fraction_of_month
+```
+
+This means per-token providers appear in `/auto-router uvi show` and the status line alongside subscription providers. Per-token UVI is **always computed** when a monthly budget is set, regardless of whether subscription UVI is enabled.
+
+The selected target’s remaining budget is reported in `decision.metadata.budgetRemaining` and visible via `/auto-router explain`.
 
 ### UVI interplay with budgets
 
@@ -271,7 +307,7 @@ UVI status also appears in `/auto-router budget` and `/auto-router explain` outp
 
 ## Utilization Velocity Index (UVI)
 
-UVI measures how fast you're consuming OAuth quota windows and adjusts routing priority in real time. It fetches usage data from the provider quota APIs (`openai-codex`, `anthropic`, `google-gemini-cli`, `google-antigravity`) and computes:
+UVI measures how fast you're consuming quota or budget and adjusts routing priority in real time. For subscription providers, it fetches usage data from provider quota APIs (`openai-codex`, `anthropic`, `google-gemini-cli`, `google-antigravity`). For per-token providers, it uses monthly spend vs. budget. UVI is computed as:
 
 ```
 UVI = consumed_fraction / elapsed_fraction_of_window
@@ -483,6 +519,7 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | `policy-engine.ts`        | Priority-ordered rule registry with shadow mode + last-decision tracking                             |
 | `budget-tracker.ts`       | Persistent daily token/cost stats per provider with atomic writes; daily limits                      |
 | `budget-auditor.ts`       | Pure `auditBudget(provider, state)` returning `ok | warning | blocked`; integrates UVI for dynamic reallocation |
+| `balance-fetcher.ts`      | Fetches balances from pay-per-token providers (DeepSeek); builds synthetic monthly UVI windows                |
 | `uvi.ts`                  | Computes UVI from quota windows (`consumed_fraction / elapsed_fraction`); classifies as `critical`, `stressed`, `ok`, or `surplus` |
 | `quota-fetcher.ts`        | Pulls real-time usage data from OpenAI, Anthropic, and Google OAuth quota APIs; token refresh + error handling |
 | `quota-cache.ts`          | TTL-gated cache for quota snapshots; batches fetches, emits per-provider `UtilizationSnapshot`       |

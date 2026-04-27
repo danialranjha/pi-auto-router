@@ -13,6 +13,7 @@ Transform `pi-auto-router` from a static target selector into a dynamic decision
 - Constraint solving (vision, reasoning, context window requirements)
 - Budget tracking (daily spend, limits, persistent stats)
 - **Utilization Velocity Index (UVI)** — real-time OAuth quota monitoring with promote/demote/block
+- **Per-token budget tracking** — balance fetching (DeepSeek), monthly budgets, env-var API key resolution, same UVI pipeline
 - **Provider health checks** — auth token verification with TTL cache; filters unhealthy providers before routing
 - **Shadow mode** (`AUTO_ROUTER_SHADOW=1`) — run full pipeline without changing routing; safety net for new features
 - **UVI hard mode** (`AUTO_ROUTER_UVI_HARD=1`) — excludes stressed providers entirely; `🛡️ uvi-hard` in status line
@@ -81,6 +82,7 @@ src/budget-tracker.ts         — Daily spend persistence
 src/budget-auditor.ts         — USD + UVI constraint rules
 src/candidate-partitioner.ts  — Promote/normal/demote bucketing + hard mode
 src/uvi.ts                    — UVI math (compute, classify, aggregate)
+src/balance-fetcher.ts       — Per-token balance API clients (DeepSeek), monthly UVI window builder
 src/quota-fetcher.ts          — OAuth usage API clients (vendored from pi-usage-bars)
 src/quota-cache.ts            — TTL-gated quota snapshot cache
 src/health-check.ts           — Auth token health verification
