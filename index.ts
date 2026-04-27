@@ -62,8 +62,18 @@ const lastShortcutByRoute = new Map<string, { shortcut: string; tier: Tier }>();
 const lastBudgetWarningByRoute = new Map<string, string>();
 const budgetTracker = new BudgetTracker();
 const quotaCache = new QuotaCache();
+
+// Shadow mode: run full pipeline but use legacy ordering for actual routing.
+let shadowMode = envShadowEnabled();
+const lastShadowByRoute = new Map<string, { shadowTargets: string[]; actualTargets: string[] }>();
+
 let budgetReady = false;
 let latestUiContext: any;
+
+function envShadowEnabled(): boolean {
+  const raw = process.env.AUTO_ROUTER_SHADOW;
+  return raw === "1" || (raw ?? "").toLowerCase() === "true" || (raw ?? "").toLowerCase() === "on";
+}
 
 function syncUtilizationIntoBudget(): void {
   if (!quotaCache.isEnabled()) return;
@@ -789,9 +799,29 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       const budgetWarnings = partition.warnings;
       const uviNotes = partition.uviNotes;
       const orderedAudited = partition.ordered;
-      const targets = orderedAudited.length > 0
+      const pipelineTargets = orderedAudited.length > 0
         ? orderedAudited
         : (solved.candidates.length > 0 ? solved.candidates : healthy);
+      // In shadow mode: use legacy config-order targets for actual routing,
+      // but fall back to pipeline targets if legacy is exhausted.
+      const legacyTargets = shadowMode
+        ? healthy.filter((t) => {
+            if (!getProviderHealthCache().isHealthy(t.provider, t.authProvider)) return false;
+            const c = cooldowns.get(getTargetKey(t));
+            return !c || c.until <= Date.now();
+          })
+        : null;
+      const targets = legacyTargets && legacyTargets.length > 0
+        ? legacyTargets
+        : pipelineTargets;
+      if (shadowMode && pipelineTargets.length > 0) {
+        lastShadowByRoute.set(routeId, {
+          shadowTargets: pipelineTargets.map((t) => t.label),
+          actualTargets: (legacyTargets && legacyTargets.length > 0 ? legacyTargets : pipelineTargets).map((t) => t.label),
+        });
+      } else if (shadowMode) {
+        lastShadowByRoute.delete(routeId);
+      }
       const constraintFallback = solved.candidates.length === 0 && solved.rejections.length > 0;
       const budgetFallback = orderedAudited.length === 0 && auditedRejections.length > 0;
 
@@ -908,7 +938,8 @@ function getStatusLine(routeId?: string): string {
   const budgetText = budgetWarning ? ` | ⚠ ${budgetWarning}` : "";
   const uviText = formatUviStatusSegment();
   const healthIssuesText = formatHealthIssuesSegment(healthy);
-  return `auto-router ${getRouteName(routeId)}${tierHint} | ${active} | healthy: ${healthy.join(", ") || "none"} | ${formatCooldowns(routeId)}${budgetText}${healthIssuesText}${uviText}`;
+  const shadowText = shadowMode ? " 🔬 shadow" : "";
+  return `auto-router ${getRouteName(routeId)}${tierHint}${shadowText} | ${active} | healthy: ${healthy.join(", ") || "none"} | ${formatCooldowns(routeId)}${budgetText}${healthIssuesText}${uviText}`;
 }
 
 function formatUviStatusSegment(): string {
@@ -1156,9 +1187,44 @@ export default function (pi: ExtensionAPI) {
         lastDecisionByRoute.clear();
         lastShortcutByRoute.clear();
         lastBudgetWarningByRoute.clear();
+        lastShadowByRoute.clear();
         getProviderHealthCache().clear();
         updateUi(ctx);
         ctx.ui.notify("Auto-router cooldowns, decision history, and health cache reset", "success");
+        return;
+      }
+
+      if (subcommand === "shadow") {
+        const [actionRaw] = remainder ? remainder.split(/\s+/) : [];
+        const action = String(actionRaw ?? "show").toLowerCase();
+        if (action === "enable") {
+          shadowMode = true;
+          ctx.ui.notify("Shadow mode enabled — pipeline runs but legacy ordering is used for routing", "success");
+        } else if (action === "disable") {
+          shadowMode = false;
+          ctx.ui.notify("Shadow mode disabled — pipeline ordering will be used for routing", "success");
+        } else if (action === "show") {
+          const lines: string[] = [`Shadow mode: ${shadowMode ? "🟢 enabled" : "🔴 disabled"}`];
+          if (shadowMode) {
+            lines.push("", "Pipeline runs but actual routing uses legacy config-order targets.");
+            lines.push("Enable permanently: AUTO_ROUTER_SHADOW=1");
+          } else {
+            lines.push("", "Enable with /auto-router shadow enable or AUTO_ROUTER_SHADOW=1");
+          }
+          if (lastShadowByRoute.size > 0) {
+            lines.push("", "Last shadow comparison:");
+            for (const [routeId, cmp] of lastShadowByRoute) {
+              lines.push(`  Route: ${routeId}`);
+              lines.push(`    Pipeline would pick: ${cmp.shadowTargets.join(" → ")}`);
+              lines.push(`    Actually used:      ${cmp.actualTargets.join(" → ")}`);
+              const diff = cmp.shadowTargets[0] !== cmp.actualTargets[0];
+              lines.push(`    Match: ${diff ? "❌ different" : "✅ same first target"}`);
+            }
+          } else {
+            lines.push("", "No shadow comparisons recorded yet. Send a prompt to see pipeline vs legacy differences.");
+          }
+          ctx.ui.notify(lines.join("\n"), "info");
+        }
         return;
       }
 
@@ -1402,6 +1468,8 @@ export default function (pi: ExtensionAPI) {
         "/auto-router explain [routeId]",
         "/auto-router shortcuts",
         "/auto-router budget [show|set <provider> <usd>|clear <provider>]",
+        "/auto-router uvi [show|enable|disable|refresh]",
+        "/auto-router shadow [show|enable|disable]",
         "/auto-router test-resolve <provider/modelId>",
         "/auto-router debug",
         "/auto-router reload",

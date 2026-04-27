@@ -171,6 +171,7 @@ Skip it for providers that authenticate internally or don’t require pi-managed
 - `/auto-router shortcuts` — list available `@` shortcuts
 - `/auto-router budget [show|set <provider> <usd>|clear <provider>]` — view/manage daily per-provider budgets
 - `/auto-router uvi [show|enable|disable|refresh]` — view/manage Utilization Velocity Index monitoring
+- `/auto-router shadow [show|enable|disable]` — run pipeline in shadow mode (log but don't change routing)
 - `/auto-router reload`
 - `/auto-router reset` — clears cooldowns, decision history, and budget warnings
 
@@ -312,14 +313,39 @@ When a provider’s UVI is `stressed` or `critical`, it also appears in the stat
 
 _Note: UVI requires valid OAuth tokens in `~/.pi/agent/auth.json`. If a token is expired and can't be refreshed, that provider shows an error in `uvi show`._
 
+## Shadow mode
+
+Shadow mode runs the full routing pipeline (shortcut parsing, context analysis, constraint solving, budget auditing, UVI reordering) but uses **legacy config-order targets** for actual routing. This lets you validate new routing logic without affecting your experience.
+
+```text
+/auto-router shadow enable
+# or set the environment variable:
+# AUTO_ROUTER_SHADOW=1
+```
+
+Once enabled, the status line shows `🔬 shadow`. Use `/auto-router shadow show` to compare what the pipeline would have picked vs. what was actually used:
+
+```text
+Shadow mode: 🟢 enabled
+
+Last shadow comparison:
+  Route: subscription-premium
+    Pipeline would pick: Gemini 3.1 Pro → Claude Opus 4.6 → GPT-5.4
+    Actually used:      Claude Opus 4.6 → Gemini 3.1 Pro → GPT-5.4
+    Match: ❌ different
+```
+
+Disable with `/auto-router shadow disable`.
+
 ## Status line
 
 The status line surfaces routing state at a glance:
 
 ```text
-auto-router Subscription Premium Router | tier=reasoning (0.90) | current: GPT-5.4 | healthy: …, … | ⚠ google-antigravity: 87% of $5.00 daily budget used | uvi: anthropic=1.64 stressed
+auto-router Subscription Premium Router 🔬 shadow | tier=reasoning (0.90) | current: GPT-5.4 | healthy: …, … | ⚠ google-antigravity: 87% of $5.00 daily budget used | uvi: anthropic=1.64 stressed
 ```
 
+- `🔬 shadow` appears when shadow mode is enabled
 - `tier=<tier> (<confidence>)` appears once a routing decision has been recorded
 - `⚠ …` appears when one or more candidate providers are at 80%+ of their daily limit
 - `uvi: …` appears when one or more providers have `stressed` or `critical` UVI status

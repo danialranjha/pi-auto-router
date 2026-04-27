@@ -64,9 +64,9 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
 ### Tier 1: Quick Wins
 | # | Feature | Effort | Impact |
 |---|---------|--------|--------|
-| 1 | **Provider health checks** — proactive ping before routing to avoid wasted failover attempts | Low | High |
-| 2 | **Shadow mode** (`AUTO_ROUTER_SHADOW=1`) — run full pipeline without changing routing; safety net for new features | Low | Medium |
-| 3 | **Hard-override env flag** for UVI surplus promotion — currently tiebreaker-only; flag to make surplus promotion override normal priority | Low | Low-Medium |
+| 1 | **Provider health checks** — proactive auth verification before routing to avoid wasted failover attempts | Low | High | ✅ |
+| 2 | **Shadow mode** (`AUTO_ROUTER_SHADOW=1`) — run full pipeline without changing routing; safety net for new features | Low | Medium | ✅ |
+| 3 | **Hard-override env flag** for UVI surplus promotion — currently tiebreaker-only; flag to make surplus promotion override normal priority | Low | Low-Medium | ⬜ |
 
 ### Tier 2: High-Impact
 | # | Feature | Effort | Impact |
