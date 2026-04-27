@@ -217,6 +217,19 @@ Example:
 
 Use `/auto-router explain` after a request to see how the shortcut influenced the decision.
 
+## Intent classification
+
+When no `@` shortcut is used, the router automatically classifies your prompt into one of four categories using keyword/pattern heuristics:
+
+| Intent     | Routing hint | Trigger examples                                          |
+| ---------- | ------------ | --------------------------------------------------------- |
+| `code`     | `swe` tier   | "implement a function", "debug the error", code blocks, file paths |
+| `creative` | `economy` tier| "write a poem", "draft a blog post", "create a story"      |
+| `analysis` | `long` tier  | "analyze this code", "summarize the document", "compare X and Y" |
+| `general`  | (no hint)    | Short prompts, greetings, meta-questions                  |
+
+The intent classification appears in `/auto-router explain` reasoning (e.g. `intent code (71%) → tier=swe`). It runs instantly with zero latency — no LLM calls required.
+
 ## Budgets
 
 `auto-router` tracks daily input/output tokens and estimated cost per provider, persisted at:
@@ -463,6 +476,7 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | `health-check.ts`         | Provider health cache — verifies OAuth tokens; independent of UVI; feeds `isHealthy` into constraint solver |
 | `candidate-partitioner.ts`| Partitions candidates into `[promoted, normal, demoted]` buckets based on budget audit + UVI; supports hard mode exclusion |
 | `latency-tracker.ts`      | Tracks per-provider request latency (rolling average, max 100 samples); used for performance-based ranking within UVI buckets |
+| `intent-classifier.ts`    | Heuristic intent classifier (code/creative/analysis/general); maps to tier hints when no @ shortcut is used |
 
 `index.ts` wires these together inside `streamAutoRouter`:
 

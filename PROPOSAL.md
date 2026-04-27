@@ -18,6 +18,7 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
 - UVI hard mode — `AUTO_ROUTER_UVI_HARD=1` excludes stressed providers entirely
 - Shadow mode — `AUTO_ROUTER_SHADOW=1` runs pipeline without changing routing, for safe rollout
 - Performance-based ranking — tracks per-provider TTFT latency; sorts candidates within UVI buckets by historical speed
+- Intent classification — heuristic keyword/pattern classifier (code/creative/analysis/general); maps to tier hints when no @ shortcut is used
 - Cooldown/retry logic for rate limits, quota exhaustion, auth failures
 - Context sanitization (`toolCall.id`, `toolResult.name`, `tool_call_id` fixes)
 - Stream error resilience, model registry fallback, stale context guard
@@ -78,11 +79,11 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
 | 4 | **Performance-based ranking** — track `(provider, tier, contextSize) → p50/p95` latency; rank candidates by historical speed | Medium | High | ✅ |
 | 5 | **Default-on for UVI** — flip the default after real-world validation | Low | Medium | ✅ |
 
-### Tier 3: Speculative / Design-Heavy (2 remaining)
+### Tier 3: Speculative / Design-Heavy (1 remaining)
 | # | Feature | Effort | Impact |
 |---|---------|--------|--------|
 | 6 | **User feedback loop** (`/auto-router rate <good|bad>`) — learn from user ratings over time | Medium | Medium |
-| 7 | **Intent classification** — classify prompts as code/creative/analysis to inform tier selection | Medium | Low-Medium |
+| 7 | **Intent classification** — classify prompts as code/creative/analysis to inform tier selection | Medium | Low-Medium | ✅ |
 
 ### Housekeeping
 | # | Feature | Effort |

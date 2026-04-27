@@ -21,6 +21,7 @@ import { partitionAuditedCandidates } from "./src/candidate-partitioner.ts";
 import { QuotaCache, mapRouteProviderToOAuth } from "./src/quota-cache.ts";
 import { getProviderHealthCache } from "./src/health-check.ts";
 import { LatencyTracker } from "./src/latency-tracker.ts";
+import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import type { RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot } from "./src/types.ts";
 
 const PROVIDER_ID = "auto-router";
@@ -785,16 +786,19 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       );
 
       const budgetState = budgetTracker.getBudgetState();
+      // Classify user intent for routing when no @ shortcut is used
+      const intent = match ? null : classifyIntent(promptText, history);
+      const effectiveTier = match?.tier ?? (intent ? intentToTier(intent.category) ?? undefined : undefined);
       const ctx = buildRoutingContext({
         prompt: promptText,
         history,
         routeId,
         availableTargets: healthy,
-        userHint: match?.tier,
+        userHint: effectiveTier,
         budgetState,
       });
 
-      const requirements = inferRequirements(ctx, tierToRequirements(match?.tier, ctx.estimatedTokens));
+      const requirements = inferRequirements(ctx, tierToRequirements(effectiveTier, ctx.estimatedTokens));
       const solved = solveConstraints(ctx, {
         requirements,
         capabilities: (t) => lookupCapabilities(t, context),
@@ -877,6 +881,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 
       const reasoningParts: string[] = [];
       if (match) reasoningParts.push(`shortcut ${match.shortcut} → tier=${match.tier}`);
+      if (intent && intent.category !== "general") reasoningParts.push(`intent ${intent.category} (${(intent.confidence * 100).toFixed(0)}%) → tier=${effectiveTier}`);
       reasoningParts.push(`${ctx.classification} context (~${ctx.estimatedTokens} tokens)`);
       if (constraintFallback) {
         reasoningParts.push(`constraints unmet for all candidates; falling back to healthy list`);
