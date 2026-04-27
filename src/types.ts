@@ -99,3 +99,10 @@ export type ShortcutEntry = {
 };
 
 export type ShortcutRegistry = Record<string, ShortcutEntry>;
+
+export type LatencyRecord = {
+  count: number;
+  totalMs: number;
+  lastMs: number;
+  updatedAt: number;
+};

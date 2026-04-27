@@ -20,6 +20,7 @@ import { BudgetTracker, todayKey } from "./src/budget-tracker.ts";
 import { partitionAuditedCandidates } from "./src/candidate-partitioner.ts";
 import { QuotaCache, mapRouteProviderToOAuth } from "./src/quota-cache.ts";
 import { getProviderHealthCache } from "./src/health-check.ts";
+import { LatencyTracker } from "./src/latency-tracker.ts";
 import type { RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot } from "./src/types.ts";
 
 const PROVIDER_ID = "auto-router";
@@ -62,6 +63,7 @@ const lastShortcutByRoute = new Map<string, { shortcut: string; tier: Tier }>();
 const lastBudgetWarningByRoute = new Map<string, string>();
 const budgetTracker = new BudgetTracker();
 const quotaCache = new QuotaCache();
+const latencyTracker = new LatencyTracker();
 
 // Shadow mode: run full pipeline but use legacy ordering for actual routing.
 let shadowMode = envShadowEnabled();
@@ -112,6 +114,7 @@ async function ensureBudgetLoaded(): Promise<void> {
   if (budgetReady) return;
   try {
     await budgetTracker.load();
+    latencyTracker.load();
   } catch {
     // ignore - tracker resets to defaults internally
   }
@@ -806,7 +809,21 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       const auditedRejections = partition.rejections;
       const budgetWarnings = partition.warnings;
       const uviNotes = partition.uviNotes;
-      const orderedAudited = partition.ordered;
+
+      // Sort within UVI buckets by historical latency (fastest first).
+      // Providers with no latency data sort last within their bucket.
+      const latencySort = (a: RouteTarget, b: RouteTarget): number => {
+        const la = latencyTracker.getAvgLatency(a.provider);
+        const lb = latencyTracker.getAvgLatency(b.provider);
+        if (la === null && lb === null) return 0;
+        if (la === null) return 1;
+        if (lb === null) return -1;
+        return la - lb;
+      };
+      partition.promoted.sort(latencySort);
+      partition.normal.sort(latencySort);
+      partition.demoted.sort(latencySort);
+      const orderedAudited = [...partition.promoted, ...partition.normal, ...partition.demoted];
       const pipelineTargets = orderedAudited.length > 0
         ? orderedAudited
         : (solved.candidates.length > 0 ? solved.candidates : healthy);
@@ -878,6 +895,10 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         reasoningParts.push(`uvi: ${uviNotes.join("; ")}`);
       }
       reasoningParts.push(`selected ${targets[0].label}`);
+      const latAvg = latencyTracker.getAvgLatency(targets[0].provider);
+      if (latAvg !== null) {
+        reasoningParts.push(`avg latency ${(latAvg / 1000).toFixed(1)}s`);
+      }
       const selectedLimit = budgetState.dailyLimit?.[targets[0].provider];
       const selectedSpend = budgetState.dailySpend?.[targets[0].provider] ?? 0;
       const budgetRemaining = typeof selectedLimit === "number" && selectedLimit > 0
@@ -898,8 +919,12 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 
       for (const target of targets) {
         lastAttemptByRoute.set(routeId, target.label);
+        const t0 = Date.now();
         const result = await tryTarget(outer, model, target, context, options);
         if (result.success) {
+          const elapsed = Date.now() - t0;
+          latencyTracker.recordLatency(target.provider, elapsed);
+          try { latencyTracker.save(); } catch { /* ignore */ }
           if (result.lastMessage?.usage) {
             try {
               await budgetTracker.recordUsage(target.provider, result.lastMessage.usage);
@@ -1003,7 +1028,9 @@ function routeSummary(routeId: string): string {
     const healthText = healthySet.has(key)
       ? `healthy${getProviderHealthCache().getHealthError(target.provider, target.authProvider) ? ` (auth issue: ${getProviderHealthCache().getHealthError(target.provider, target.authProvider)})` : ""}`
       : "unavailable";
-    return `${index + 1}. ${target.label || "Unknown"} [${target.provider || "unknown"}/${target.modelId || "unknown"}] | ${authText} | ${healthText}${cooldownText}`;
+    const latAvg = latencyTracker.getAvgLatency(target.provider);
+    const latText = latAvg !== null ? ` | ⏱ avg ${(latAvg / 1000).toFixed(1)}s (${latencyTracker.getAll().get(target.provider)!.count} samples)` : "";
+    return `${index + 1}. ${target.label || "Unknown"} [${target.provider || "unknown"}/${target.modelId || "unknown"}] | ${authText} | ${healthText}${cooldownText}${latText}`;
   });
   return [
     `${routeId} — ${prettyRouteName(routeId)}`,
@@ -1203,6 +1230,7 @@ export default function (pi: ExtensionAPI) {
         lastBudgetWarningByRoute.clear();
         lastShadowByRoute.clear();
         getProviderHealthCache().clear();
+        latencyTracker.clear();
         updateUi(ctx);
         ctx.ui.notify("Auto-router cooldowns, decision history, and health cache reset", "success");
         return;

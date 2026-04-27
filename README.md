@@ -347,6 +347,18 @@ Last shadow comparison:
 
 Disable with `/auto-router shadow disable`.
 
+## Performance-based ranking
+
+The router tracks per-provider request latency (time-to-response) using a rolling average and uses it as a **tiebreaker within UVI buckets**. Candidates are ordered:
+
+1. Promoted (UVI surplus), sorted fastest → slowest
+2. Normal, sorted fastest → slowest
+3. Demoted (UVI stressed), sorted fastest → slowest
+
+Providers with no latency history sort last within their bucket (cold start). Data persists in `~/.pi/agent/extensions/auto-router.latency.json` and survives restarts.
+
+View latency data in `/auto-router list` (shows per-target ⏱ avg) and `/auto-router explain` (includes avg latency in reasoning). Reset with `/auto-router reset`.
+
 ## Status line
 
 The status line surfaces routing state at a glance:
@@ -442,6 +454,7 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | `quota-cache.ts`          | TTL-gated cache for quota snapshots; batches fetches, emits per-provider `UtilizationSnapshot`       |
 | `health-check.ts`         | Provider health cache — verifies OAuth tokens; independent of UVI; feeds `isHealthy` into constraint solver |
 | `candidate-partitioner.ts`| Partitions candidates into `[promoted, normal, demoted]` buckets based on budget audit + UVI; supports hard mode exclusion |
+| `latency-tracker.ts`      | Tracks per-provider request latency (rolling average, max 100 samples); used for performance-based ranking within UVI buckets |
 
 `index.ts` wires these together inside `streamAutoRouter`:
 

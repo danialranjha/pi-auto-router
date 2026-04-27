@@ -17,6 +17,7 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
 - Provider health checks — auth token verification with TTL cache, filters unhealthy providers before routing
 - UVI hard mode — `AUTO_ROUTER_UVI_HARD=1` excludes stressed providers entirely
 - Shadow mode — `AUTO_ROUTER_SHADOW=1` runs pipeline without changing routing, for safe rollout
+- Performance-based ranking — tracks per-provider TTFT latency; sorts candidates within UVI buckets by historical speed
 - Cooldown/retry logic for rate limits, quota exhaustion, auth failures
 - Context sanitization (`toolCall.id`, `toolResult.name`, `tool_call_id` fixes)
 - Stream error resilience, model registry fallback, stale context guard
@@ -74,7 +75,7 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
 ### Tier 2: High-Impact
 | # | Feature | Effort | Impact |
 |---|---------|--------|--------|
-| 4 | **Performance-based ranking** — track `(provider, tier, contextSize) → p50/p95` latency; rank candidates by historical speed | Medium | High |
+| 4 | **Performance-based ranking** — track `(provider, tier, contextSize) → p50/p95` latency; rank candidates by historical speed | Medium | High | ✅ |
 | 5 | **Default-on for UVI** — flip the default after real-world validation | Low | Medium |
 
 ### Tier 3: Speculative / Design-Heavy
