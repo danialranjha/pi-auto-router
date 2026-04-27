@@ -98,6 +98,62 @@ describe("parseGoogleQuotaBuckets", () => {
   it("returns null when no buckets present", () => {
     assert.equal(parseGoogleQuotaBuckets({}, "gemini"), null);
   });
+
+  it("captures resetTime from primary and secondary buckets", () => {
+    const primaryReset = "2026-04-27T00:00:00.000Z";
+    const secondaryReset = "2026-04-27T06:00:00.000Z";
+    const data = {
+      buckets: [
+        { tokenType: "REQUESTS", modelId: "gemini-2.5-pro", remainingFraction: 0.3, resetTime: primaryReset },
+        { tokenType: "REQUESTS", modelId: "gemini-2.5-flash", remainingFraction: 0.6, resetTime: secondaryReset },
+      ],
+    };
+    const result = parseGoogleQuotaBuckets(data, "gemini");
+    assert.ok(result);
+    assert.equal(result!.sessionResetsAt, primaryReset);
+    assert.equal(result!.weeklyResetsAt, secondaryReset);
+  });
+});
+
+describe("usageToWindows google resetTime", () => {
+  it("derives windowDurationMs from per-bucket resetTime", () => {
+    const fetchedAt = 1_700_000_000_000;
+    const sessionReset = new Date(fetchedAt + 6 * 60 * 60 * 1000).toISOString();
+    const weeklyReset = new Date(fetchedAt + 4 * 24 * 60 * 60 * 1000).toISOString();
+    const windows = usageToWindows("google-gemini-cli", {
+      session: 30,
+      weekly: 65,
+      sessionResetsAt: sessionReset,
+      weeklyResetsAt: weeklyReset,
+      fetchedAt,
+    });
+    assert.equal(windows.length, 2);
+    // session (primary bucket)
+    assert.equal(windows[0].scope, "session");
+    assert.equal(windows[0].resetsAt, sessionReset);
+    assert.equal(windows[0].windowDurationMs, 6 * 60 * 60 * 1000);
+    assert.equal(windows[0].usedPercent, 30);
+    // weekly (secondary bucket)
+    assert.equal(windows[1].scope, "weekly");
+    assert.equal(windows[1].resetsAt, weeklyReset);
+    assert.equal(windows[1].windowDurationMs, 4 * 24 * 60 * 60 * 1000);
+    assert.equal(windows[1].usedPercent, 65);
+  });
+
+  it("falls back to GOOGLE_DAILY_WINDOW_MS when resetsAt is missing or stale", () => {
+    const fetchedAt = 1_700_000_000_000;
+    const stale = new Date(fetchedAt - 1000).toISOString();
+    const windows = usageToWindows("google-antigravity", {
+      session: 10,
+      weekly: 10,
+      sessionResetsAt: stale,
+      weeklyResetsAt: undefined,
+      fetchedAt,
+    });
+    assert.equal(windows.length, 2);
+    assert.equal(windows[0].windowDurationMs, GOOGLE_DAILY_WINDOW_MS);
+    assert.equal(windows[1].windowDurationMs, GOOGLE_DAILY_WINDOW_MS);
+  });
 });
 
 describe("fetchCodexUsage", () => {
@@ -236,16 +292,19 @@ describe("usageToWindows", () => {
     assert.equal(windows[0].resetsAt, sessionReset);
   });
 
-  it("emits a single daily window for google providers", () => {
+  it("emits two windows for google providers (session + weekly)", () => {
     const windows = usageToWindows("google-antigravity", {
       session: 40,
       weekly: 50,
       fetchedAt: 1_700_000_000_000,
     });
-    assert.equal(windows.length, 1);
-    assert.equal(windows[0].scope, "daily");
+    assert.equal(windows.length, 2);
+    assert.equal(windows[0].scope, "session");
     assert.equal(windows[0].windowDurationMs, GOOGLE_DAILY_WINDOW_MS);
     assert.equal(windows[0].usedPercent, 40);
+    assert.equal(windows[1].scope, "weekly");
+    assert.equal(windows[1].windowDurationMs, GOOGLE_DAILY_WINDOW_MS);
+    assert.equal(windows[1].usedPercent, 50);
   });
 
   it("returns empty when usage is missing or errored", () => {

@@ -17,7 +17,7 @@ import { buildRoutingContext } from "./src/context-analyzer.ts";
 import { DEFAULT_SHORTCUTS, listShortcuts, parseShortcut } from "./src/shortcut-parser.ts";
 import { inferRequirements, solveConstraints, type CapabilityMap, type ConstraintRequirements } from "./src/constraint-solver.ts";
 import { BudgetTracker, todayKey } from "./src/budget-tracker.ts";
-import { auditBudget } from "./src/budget-auditor.ts";
+import { partitionAuditedCandidates } from "./src/candidate-partitioner.ts";
 import { QuotaCache, mapRouteProviderToOAuth } from "./src/quota-cache.ts";
 import type { RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot } from "./src/types.ts";
 
@@ -776,33 +776,11 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         },
       });
 
-      const auditedRejections: string[] = [];
-      const budgetWarnings: string[] = [];
-      const auditedCandidates: RouteTarget[] = [];
-      const promotedCandidates: RouteTarget[] = [];
-      const demotedCandidates: RouteTarget[] = [];
-      const uviNotes: string[] = [];
-      for (const cand of solved.candidates) {
-        const audit = auditBudget(cand.provider, budgetState);
-        if (audit.status === "blocked") {
-          auditedRejections.push(`${cand.label}: ${audit.message}`);
-          continue;
-        }
-        if (audit.status === "warning" && audit.message) {
-          budgetWarnings.push(audit.message);
-        }
-        if (audit.hint === "promote") {
-          promotedCandidates.push(cand);
-          uviNotes.push(`${cand.label} promoted (UVI=${audit.uvi?.toFixed(2)} surplus)`);
-        } else if (audit.hint === "demote") {
-          demotedCandidates.push(cand);
-          uviNotes.push(`${cand.label} demoted (UVI=${audit.uvi?.toFixed(2)} stressed)`);
-        } else {
-          auditedCandidates.push(cand);
-        }
-      }
-
-      const orderedAudited = [...promotedCandidates, ...auditedCandidates, ...demotedCandidates];
+      const partition = partitionAuditedCandidates(solved.candidates, budgetState);
+      const auditedRejections = partition.rejections;
+      const budgetWarnings = partition.warnings;
+      const uviNotes = partition.uviNotes;
+      const orderedAudited = partition.ordered;
       const targets = orderedAudited.length > 0
         ? orderedAudited
         : (solved.candidates.length > 0 ? solved.candidates : healthy);
@@ -1054,6 +1032,21 @@ export default function (pi: ExtensionAPI) {
   pi.on("model_select", async (_event, ctx) => updateUi(ctx));
   pi.on("agent_start", async (_event, ctx) => updateUi(ctx));
   pi.on("agent_end", async (_event, ctx) => updateUi(ctx));
+
+  // Correct tool-name hallucinations: the model often invents MCP-style names
+  // (e.g. mcp__tavily__tavily_search) for tools that are actually registered
+  // as native pi tools (web_search, web_extract). Append a hard nudge.
+  pi.on("before_agent_start", async (event) => {
+    const nudge = [
+      "",
+      "## Tool naming (IMPORTANT)",
+      "For web search and URL extraction in this pi environment:",
+      "- Use `mcp__custom-tools__web_search` for web search.",
+      "- Use `mcp__custom-tools__web_extract` for fetching URL content.",
+      "Do NOT call `mcp__tavily__tavily_search` / `mcp__tavily__tavily_extract` — those names do not resolve and will fail with `Tool not found`.",
+    ].join("\n");
+    return { systemPrompt: (event.systemPrompt ?? "") + "\n" + nudge };
+  });
 
   pi.registerCommand("auto-router", {
     description: "Auto-router status, routes, aliases, search, resolve, and reset",

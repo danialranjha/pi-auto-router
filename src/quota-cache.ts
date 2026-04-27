@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 import {
   fetchAllUsages,
   usageToWindows,
@@ -11,6 +14,8 @@ import {
   type UVIThresholds,
   type UtilizationSnapshot,
 } from "./types.ts";
+
+const SETTINGS_PATH = path.join(os.homedir(), ".pi", "agent", "settings.json");
 
 const OAUTH_PROVIDERS: OAuthProviderId[] = [
   "openai-codex",
@@ -70,6 +75,8 @@ export class QuotaCache {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
+    process.env.AUTO_ROUTER_UVI = enabled ? "1" : "0";
+    writeUviEnabledToSettings(enabled);
   }
 
   getSnapshot(oauthProvider: OAuthProviderId): UtilizationSnapshot | undefined {
@@ -159,8 +166,9 @@ export class QuotaCache {
 
 function envEnabled(): boolean {
   const raw = process.env.AUTO_ROUTER_UVI;
-  if (!raw) return false;
-  return raw === "1" || raw.toLowerCase() === "true" || raw.toLowerCase() === "on";
+  if (raw) return raw === "1" || raw.toLowerCase() === "true" || raw.toLowerCase() === "on";
+  // Fall back to persisted settings file so enabled state survives restarts.
+  return readUviEnabledFromSettings();
 }
 
 function envTtlMs(): number | undefined {
@@ -168,4 +176,31 @@ function envTtlMs(): number | undefined {
   if (!raw) return undefined;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function readUviEnabledFromSettings(): boolean {
+  try {
+    const raw = fs.readFileSync(SETTINGS_PATH, "utf-8");
+    const settings = JSON.parse(raw);
+    return settings?.autoRouterUviEnabled === true;
+  } catch {
+    return false;
+  }
+}
+
+function writeUviEnabledToSettings(enabled: boolean): void {
+  try {
+    let settings: Record<string, unknown> = {};
+    try {
+      const raw = fs.readFileSync(SETTINGS_PATH, "utf-8");
+      settings = JSON.parse(raw);
+    } catch {
+      // file missing or corrupt; start fresh
+    }
+    settings.autoRouterUviEnabled = enabled;
+    fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n");
+  } catch {
+    // best-effort; don't crash if settings can't be written
+  }
 }

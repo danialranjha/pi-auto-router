@@ -229,7 +229,7 @@ let cachedOAuthResolver: OAuthApiKeyResolver | null = null;
 
 async function getDefaultOAuthResolver(): Promise<OAuthApiKeyResolver> {
   if (cachedOAuthResolver) return cachedOAuthResolver;
-  const mod = await import("@mariozechner/pi-ai");
+  const mod = await import("@mariozechner/pi-ai/oauth");
   if (typeof (mod as any).getOAuthApiKey !== "function") {
     throw new Error("oauth resolver unavailable");
   }
@@ -316,7 +316,7 @@ function pickMostUsedBucket(buckets: any[]): any | null {
 export function parseGoogleQuotaBuckets(
   data: any,
   provider: "gemini" | "antigravity",
-): { session: number; weekly: number } | null {
+): { session: number; weekly: number; sessionResetsAt?: string; weeklyResetsAt?: string } | null {
   const allBuckets = Array.isArray(data?.buckets) ? data.buckets : [];
   if (!allBuckets.length) return null;
   const requestBuckets = allBuckets.filter((b: any) => String(b?.tokenType || "").toUpperCase() === "REQUESTS");
@@ -334,7 +334,9 @@ export function parseGoogleQuotaBuckets(
   const session = usedPercentFromRemainingFraction(primaryBucket?.remainingFraction);
   const weekly = usedPercentFromRemainingFraction(secondaryBucket?.remainingFraction);
   if (session == null || weekly == null) return null;
-  return { session, weekly };
+  const sessionResetsAt = typeof primaryBucket?.resetTime === "string" ? primaryBucket.resetTime : undefined;
+  const weeklyResetsAt = typeof secondaryBucket?.resetTime === "string" ? secondaryBucket.resetTime : undefined;
+  return { session, weekly, sessionResetsAt, weeklyResetsAt };
 }
 
 function googleMetadata(projectId?: string) {
@@ -563,11 +565,36 @@ export function usageToWindows(provider: OAuthProviderId, usage: UsageData | nul
     }
     case "google-gemini-cli":
     case "google-antigravity": {
+      // Google's BucketInfo exposes per-bucket resetTime (ISO-8601). When present,
+      // derive the actual window duration from (resetTime - fetchedAt); otherwise
+      // fall back to the 24h assumption.
+      // Primary bucket (most-used model, e.g. gemini-pro) → session scope.
+      let sessionMs = GOOGLE_DAILY_WINDOW_MS;
+      if (usage.sessionResetsAt) {
+        const resetMs = new Date(usage.sessionResetsAt).getTime();
+        if (Number.isFinite(resetMs) && resetMs > fetchedAt) sessionMs = resetMs - fetchedAt;
+      }
       windows.push({
         provider,
-        scope: "daily",
+        scope: "session",
         usedPercent: usage.session,
-        windowDurationMs: GOOGLE_DAILY_WINDOW_MS,
+        resetsAt: usage.sessionResetsAt,
+        windowDurationMs: sessionMs,
+        source,
+        fetchedAt,
+      });
+      // Secondary bucket (next-most-used model, e.g. gemini-flash) → weekly scope.
+      let weeklyMs = GOOGLE_DAILY_WINDOW_MS;
+      if (usage.weeklyResetsAt) {
+        const resetMs = new Date(usage.weeklyResetsAt).getTime();
+        if (Number.isFinite(resetMs) && resetMs > fetchedAt) weeklyMs = resetMs - fetchedAt;
+      }
+      windows.push({
+        provider,
+        scope: "weekly",
+        usedPercent: usage.weekly,
+        resetsAt: usage.weeklyResetsAt,
+        windowDurationMs: weeklyMs,
         source,
         fetchedAt,
       });

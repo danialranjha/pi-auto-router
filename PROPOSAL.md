@@ -4,29 +4,23 @@
 Transform `pi-auto-router` from a static target selector into a dynamic decision engine that analyzes context, intent, and budgets to select the optimal model.
 
 ## Current State
-The auto-router has been fully implemented with:
+Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **shipped**. 105/105 tests pass.
 
-### ✅ Implemented Features
-- **Static route definitions** with ordered failover chains
-- **Dynamic routing pipeline** (Shortcut Parser → Context Analyzer → Constraint Solver → Budget Auditor → Selector)
-- **@ shortcut commands** (`@reasoning`, `@swe`, `@long`, `@fast`, `@vision`) to bias routing
-- **Context-aware routing** — estimates token count, classifies context size, filters targets by capability
-- **Constraint solving** — matches targets against vision/reasoning/context window requirements
-- **Budget tracking** — daily spend tracking per provider with limits and warnings
-- **Cooldown/retry logic** — expanded to handle rate limits, quota exhaustion, invalid credentials, and missing/stale auth tokens
-- **Auth health detection** — expired OAuth tokens cause retryable failures that rotate to next target
-- **Context sanitization** — automatically fixes missing `toolCall.id`, `toolResult.name`, and `tool_call_id` fields to prevent provider validation errors
-- **Stream error resilience** — mid-stream errors are caught and trigger failover; `try/catch` around entire streaming loop
-- **Model registry fallback** — `resolveModelFromRegistry` falls back through `getModel()`, registry list, and fuzzy matching
-- **Route model ID correction** — `deepseek-reasoner` → `deepseek-v4-pro`, `deepseek-chat` → `deepseek-v4-flash`
-- **Stale context guard** — `refreshStatus` wrapped in try/catch to prevent crashes in non-interactive mode
-- **Alias resolution** with `/auto-router switch`, `/auto-router resolve`
-- **UI commands** — `/auto-router status`, `/auto-router list`, `/auto-router explain`, `/auto-router budget`, `/auto-router shortcuts`, `/auto-router search`, `/auto-router show`, `/auto-router debug`, `/auto-router reload`, `/auto-router reset`
+### ✅ Completed
+- Static route definitions with ordered failover chains
+- Dynamic routing pipeline (Shortcut Parser → Context Analyzer → Constraint Solver → Budget Auditor → Selector)
+- `@` shortcut commands (`@reasoning`, `@swe`, `@long`, `@fast`, `@vision`)
+- Context-aware routing (token estimation, context classification, capability filtering)
+- Constraint solving (vision, reasoning, context window requirements)
+- Budget tracking (daily spend, limits, persistent stats)
+- Utilization Velocity Index (UVI) — real-time OAuth quota monitoring with promote/demote/block
+- Cooldown/retry logic for rate limits, quota exhaustion, auth failures
+- Context sanitization (`toolCall.id`, `toolResult.name`, `tool_call_id` fixes)
+- Stream error resilience, model registry fallback, stale context guard
+- Status line, `/auto-router explain`, `/auto-router budget`, `/auto-router uvi`
+- All UI commands (`status`, `list`, `show`, `search`, `switch`, `aliases`, `reload`, `reset`, etc.)
 
 ## Target Architecture
-
-### 1. Routing Decision Pipeline
-The PolicyEngine runs an ordered pipeline of rules:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -36,292 +30,66 @@ The PolicyEngine runs an ordered pipeline of rules:
     ┌──────────────────────▼──────────────────────┐
     │  1. SHORTCUT PARSER                          │  ✅
     │     Checks for @reasoning, @swe, @long, etc │
-    │     → Returns tier hint or null             │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
     │  2. CONTEXT ANALYZER                         │  ✅
-    │     Calculates token count, history depth    │
-    │     → Returns context classification          │
+    │     Token count, history depth, classification │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
     │  3. CONSTRAINT SOLVER                        │  ✅
-    │     Matches: vision? reasoning? max_tokens?  │
-    │     Filters dead/unhealthy targets           │
-    │     → Returns candidate targets               │
+    │     vision? reasoning? max_tokens? cooldown? │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
     │  4. BUDGET AUDITOR                           │  ✅
-    │     Checks provider quotas/cost estimates    │
-    │     → Filters over-budget paths             │
+    │     USD limits + UVI dynamic reallocation    │
     └──────────────────────┬──────────────────────┘
                            │
     ┌──────────────────────▼──────────────────────┐
     │  5. SELECTOR                                   │  ✅
-    │     Ranks candidates, picks best             │
-    │     → Returns RoutingDecision               │
+    │     Partition → [promoted, normal, demoted]  │
     └─────────────────────────────────────────────┘
                            │
                            ▼
     ┌─────────────────────────────────────────────┐
     │  6. TARGET EXECUTION                         │  ✅
-    │     Iterates targets with:                    │
-    │     - Context sanitization                   │
-    │     - Streaming error catch                  │
-    │     - Retryable error detection              │
-    │     - Cooldown management                    │
-    │     → Returns success or failover            │
+    │     Sanitize → Stream → Failover on error    │
     └─────────────────────────────────────────────┘
 ```
 
-### 2. Data Structures
+## Remaining Work
 
-```typescript
-// Fully implemented in src/types.ts
-interface RoutingDecision {
-  tier: 'reasoning' | 'swe' | 'long' | 'economy' | 'vision';
-  phase: string;
-  target: RouteTarget;
-  reasoning: string;
-  metadata: {
-    estimatedTokens: number;
-    budgetRemaining: number;
-    confidence: number;
-  };
-}
+### Tier 1: Quick Wins
+| # | Feature | Effort | Impact |
+|---|---------|--------|--------|
+| 1 | **Provider health checks** — proactive ping before routing to avoid wasted failover attempts | Low | High |
+| 2 | **Shadow mode** (`AUTO_ROUTER_SHADOW=1`) — run full pipeline without changing routing; safety net for new features | Low | Medium |
+| 3 | **Hard-override env flag** for UVI surplus promotion — currently tiebreaker-only; flag to make surplus promotion override normal priority | Low | Low-Medium |
 
-interface PolicyRule {
-  name: string;
-  priority: number;
-  condition: (ctx: RoutingContext) => boolean;
-  action: (ctx: RoutingContext) => RoutingDecision | null;
-}
+### Tier 2: High-Impact
+| # | Feature | Effort | Impact |
+|---|---------|--------|--------|
+| 4 | **Performance-based ranking** — track `(provider, tier, contextSize) → p50/p95` latency; rank candidates by historical speed | Medium | High |
+| 5 | **Default-on for UVI** — flip the default after real-world validation | Low | Medium |
 
-interface RoutingContext {
-  prompt: string;
-  history: Message[];
-  routeId: string;
-  estimatedTokens: number;
-  classification: ContextClassification;
-  availableTargets: RouteTarget[];
-  userHint?: Tier;
-  budgetState?: BudgetState;
-}
+### Tier 3: Speculative / Design-Heavy
+| # | Feature | Effort | Impact |
+|---|---------|--------|--------|
+| 6 | **User feedback loop** (`/auto-router rate <good|bad>`) — learn from user ratings over time | Medium | Medium |
+| 7 | **Intent classification** — classify prompts as code/creative/analysis to inform tier selection | Medium | Low-Medium |
 
-interface BudgetState {
-  dailySpend: Record<string, number>;
-  dailyLimit: Record<string, number>;
-}
-
-interface ShortcutEntry {
-  tier: Tier;
-  description: string;
-  pattern: RegExp;
-}
-
-type Tier = 'reasoning' | 'swe' | 'long' | 'economy' | 'vision';
-type ContextClassification = 'short' | 'medium' | 'long' | 'epic';
-```
-
-## 3. Implementation Status
-
-### Phase 1: ✅ Foundation (Core Types & Context Analyzer)
-- [x] Define `RoutingDecision`, `PolicyRule`, `RoutingContext` interfaces — `src/types.ts`
-- [x] Implement `ContextAnalyzer` — `src/context-analyzer.ts`
-  - [x] Token estimation (char count / 4)
-  - [x] History depth calculation
-  - [x] Context classification (short/medium/long/epic)
-- [x] Unit tests for ContextAnalyzer — `tests/context-analyzer.test.ts`
-- [x] PolicyEngine integration — `src/policy-engine.ts`
-
-### Phase 2: ✅ Shortcut Parser (@ Commands)
-- [x] Define `ShortcutRegistry` with patterns:
-  - `@reasoning` → tier: `reasoning`
-  - `@swe` → tier: `swe`
-  - `@long` → tier: `long`
-  - `@vision` → tier: `vision`
-  - `@fast` → tier: `economy`
-- [x] Implement `parseShortcut()` — `src/shortcut-parser.ts`
-- [x] Hook into prompt handling (pre-process before routing)
-- [x] Tests for pattern matching — `tests/shortcut-parser.test.ts`
-- [x] `/auto-router shortcuts` command
-
-### Phase 3: ✅ Constraint Solver
-- [x] Implement `ConstraintSolver` — `src/constraint-solver.ts`
-  - [x] Filter by vision requirement
-  - [x] Filter by reasoning requirement
-  - [x] Filter by contextWindow >= estimated tokens
-  - [x] Integrate cooldown/no-auth status
-- [x] Tests for constraint combinations — `tests/constraint-solver.test.ts`
-
-### Phase 4: ✅ Budget Auditor & Persistence
-- [x] Stats file schema — `auto-router.stats.json` with per-day per-provider spend
-- [x] Implement `BudgetTracker` — `src/budget-tracker.ts`
-  - [x] Read/write stats file
-  - [x] Atomic updates (write to temp, rename)
-  - [x] Graceful handling of missing/corrupt stats
-- [x] Implement `BudgetAuditor` — `src/budget-auditor.ts`
-- [x] `/auto-router budget [show|set|clear]` command
-- [x] Budget warnings in routing decisions
-
-### Phase 5: ✅ Integration & Target Selection
-- [x] Integrate into `streamAutoRouter()` — calls ContextAnalyzer → inferRequirements → solveConstraints → auditBudget → tryTarget
-- [x] `lastRoutingDecision` tracking for UI
-- [x] **Context sanitization** (`sanitizeContext`) — fixes missing `toolCall.id`, `toolResult.name`, `tool_call_id` before sending to providers
-- [x] **Stream error resilience** — `try/catch` around streaming loop; mid-stream errors trigger failover
-- [x] **Model registry fallbacks** — `getModel()` → registry list → fuzzy matching
-
-### Phase 6: ✅ UI Improvements
-- [x] Status line with routing hint: `auto-router reasoning | current: Claude Opus 4.7 | healthy: L1: Claude... | no cooldowns`
-- [x] `/auto-router explain` — shows last routing decision details
-- [x] Budget warnings at thresholds
-- [x] Route summary showing target health and auth status
-
-### Phase 7: 🟡 Advanced Features (Partial)
-- [ ] Performance-based ranking (track latency per provider)
-- [ ] Intent classification (code vs creative vs analysis)
-- [x] **Dynamic budget reallocation (Utilization Velocity Index)** — see §9
-    - Polls OAuth usage endpoints for Anthropic, OpenAI Codex, Google Gemini, and Google Antigravity (vendored from `ajarellanod/pi-usage-bars`).
-    - Computes UVI = consumed_fraction / elapsed_fraction_of_window per quota window, takes the worst across windows.
-    - Taxes (deprioritizes) providers with `UVI ≥ 1.5` (stressed) and blocks at `UVI ≥ 2.0` (critical).
-    - Promotes premium providers when `UVI ≤ 0.5` near the end of the reset window (`elapsed ≥ 0.7`).
-    - Surfaced via `/auto-router uvi` and integrated into `/auto-router budget`, the status line, and `explain` reasoning.
-    - Off by default; opt in with `AUTO_ROUTER_UVI=1` or `/auto-router uvi enable`.
-- [ ] Provider health checks (proactive ping)
-- [ ] User feedback loop (`/auto-router rate <good|bad> [reason]`)
-
-## 4. Error Resilience (Post-Proposal Additions)
-
-The following critical resilience features were added beyond the original proposal based on real-world issues:
-
-### 4.1 Context Sanitization
-Before sending context to any provider, `sanitizeContext()` ensures:
-- Every `toolCall` has a non-empty `id` (generates random fallback if missing)
-- Every `toolResult` has a non-empty `tool_call_id` / `toolCallId`
-- Every `toolResult` has a non-empty `name` / `toolName` (required by Gemini's `function_response` part)
-
-This prevents `REQUIRED_FIELD_MISSING` and empty-string validation errors.
-
-### 4.2 Retryable Error Detection
-`isRetryableError()` expanded to catch:
-- Rate limits (429, "too many requests", "quota exhausted")
-- Auth failures ("invalid credentials", "invalid google cloud code assist credentials")
-- Provider validation errors ("invalid 'input", "call_id", "function_response.name")
-- Network errors (timeout, ECONNRESET, 502, 503, 504)
-- Budget/balance errors ("insufficient balance", "credits exhausted")
-
-### 4.3 Quota Reset Parsing
-`parseResetAfterMs()` extended to handle:
-- Short form: `reset after 54s`, `5m`, `2h`
-- Full word form: `reset after 54 seconds`, `5 minutes`, `2 hours`
-
-### 4.4 Non-Interactive Mode Safety
-- `refreshStatus()` wrapped in try/catch to handle stale extension contexts
-- Cooldown applied on missing auth tokens so failover happens immediately
-
-## 5. Integration Flow
-
-```typescript
-// Current flow (implemented):
-streamAutoRouter()
-  → loadRoutesConfig()
-  → parseShortcut()           // Check @ shortcuts
-  → buildRoutingContext()     // Estimate tokens, classify context
-  → inferRequirements()       // Map tier → capability needs
-  → solveConstraints()        // Filter targets by capability
-  → auditBudget()             // Filter by budget limits
-  → tryTarget() for each candidate:
-      → sanitizeContext()     // Fix missing fields
-      → streamSimple()        // Stream with try/catch wrapper
-      → on error:
-          if retryable: putOnCooldown → next target
-          if terminal: abort
-      → on success: record usage, return
-```
-
-### Backward Compatibility
-
-- **Routes config**: All existing configs work unchanged
-- **Failover loop**: Preserved as ultimate fallback when all targets exhaust
-- **Commands**: All existing (`status`, `list`, `show`, `search`, `switch`) work
-- **Shadow mode**: Future — `AUTO_ROUTER_SHADOW=1` env var for safe rollout of new features
-
-## 6. Testing Status
-
-| Layer | Status | Details |
-|-------|--------|---------|
-| **Unit** | ✅ | `context-analyzer.test.ts`, `constraint-solver.test.ts`, `budget-tracker.test.ts`, `policy-engine.test.ts`, `shortcut-parser.test.ts`, `budget-auditor.test.ts` |
-| **Verification** | ✅ | All 5 route chains tested non-interactively: subscription-reasoning, subscription-swe, subscription-long-context, subscription-economy, subscription-fast |
-| **Shadow mode** | ⬜ | Not yet implemented |
-| **Manual QA** | ✅ | `/auto-router` commands verified |
-
-## 7. Module Map
-
-```
-index.ts                          — Extension entry point, provider registration, streamAutoRouter, tryTarget, sanitizeContext, UI commands
-src/types.ts                      — All type definitions (incl. QuotaWindow, UtilizationSnapshot, UVIThresholds)
-src/context-analyzer.ts           — Token estimation, history depth, classification
-src/constraint-solver.ts          — Target filtering by capability requirements
-src/budget-tracker.ts             — Daily spend tracking, limits, persistence, utilization snapshots
-src/budget-auditor.ts             — Budget + UVI constraint rule (emits promote/demote hints)
-src/policy-engine.ts              — Pipeline orchestrator (skeleton, integrated into index.ts)
-src/shortcut-parser.ts            — @ shortcut parsing, registry
-src/uvi.ts                        — Pure UVI math (computeUVI, classifyUVI, aggregateProviderUVI)
-src/quota-fetcher.ts              — OAuth usage endpoints + adapter to QuotaWindow[] (vendored from ajarellanod/pi-usage-bars)
-src/quota-cache.ts                — TTL-bounded async refresh of utilization snapshots, route→OAuth provider mapping
-tests/                            — Unit tests for all modules
-```
-
-## 9. Dynamic Budget Reallocation (UVI)
-
-### Overview
-The auto-router can sense real-time quota pressure on each OAuth subscription provider and reorder candidates accordingly, rather than relying solely on static USD limits.
-
-### How it works
-1. `QuotaCache` polls each provider's OAuth usage endpoint via `fetchAllUsages()` (vendored from `pi-usage-bars`):
-   - Anthropic: `api.anthropic.com/api/oauth/usage` (5-hour + 7-day windows)
-   - OpenAI Codex: `chatgpt.com/backend-api/wham/usage` (5-hour + 7-day windows)
-   - Google Gemini / Antigravity: `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` (daily window)
-2. Each `UsageData` is converted to `QuotaWindow[]` and aggregated into a `UtilizationSnapshot` per provider.
-3. `BudgetTracker.setUtilization()` plumbs snapshots into `BudgetState.utilization`.
-4. `auditBudget()` consults UVI alongside USD spend:
-   - `UVI ≥ 2.0` → `blocked` (treated like over-budget)
-   - `UVI ≥ 1.5` → `warning` + `hint: "demote"`
-   - `UVI ≤ 0.5` and `elapsed ≥ 0.7` → `ok` + `hint: "promote"`
-5. `streamAutoRouter` partitions audited candidates into `[promoted, normal, demoted]` and tries them in that order.
-
-### Refresh policy
-- Async, non-blocking refresh on each prompt; never adds latency.
-- TTL: 60s (override via `AUTO_ROUTER_UVI_TTL_MS`).
-- Hard floor of 30s between refreshes per provider.
-- Token refresh handled by `@mariozechner/pi-ai`'s `getOAuthApiKey()`.
-
-### Configuration
-- `AUTO_ROUTER_UVI=1` to enable (off by default).
-- `AUTO_ROUTER_UVI_TTL_MS=<ms>` to override TTL.
-- `/auto-router uvi enable|disable|show|refresh` for runtime control.
-
-### Surfaces
-- `/auto-router budget` includes a UVI block per provider.
-- `/auto-router explain` reasoning includes promote/demote notes.
-- Status line gains a `uvi: provider=N.NN stressed` segment when any provider is `stressed`/`critical`.
-
-### Provider name mapping
-`auditBudget` keys by route-config provider name. The cache re-keys snapshots so `claude-agent-sdk` resolves to the `anthropic` snapshot. Other providers (`openai-codex`, `google-gemini-cli`, `google-antigravity`) match 1:1.
-
-### Limitations
-- Google's `retrieveUserQuota` does not expose its window duration; we assume 24h.
-- Snapshot only updates on the prompt *after* a successful refresh (TTL design).
-- Static USD limits still apply on top of UVI — UVI augments rather than replaces.
-
-## 8. Success Metrics
-
+## Success Metrics
 - ✅ Zero regressions in existing failover behavior
 - ✅ Routing decisions explainable via `/auto-router explain`
 - ✅ Budget overruns prevented (warnings at thresholds)
-- ✅ @ shortcuts reduce manual route switching
+- ✅ `@` shortcuts reduce manual route switching
 - ✅ Auth token expiration handled gracefully with failover
 - ✅ Provider validation errors sanitized before sending
 - ✅ All 5 route chains verified in non-interactive mode
+
+## Backward Compatibility
+- Routes config: all existing configs work unchanged
+- Failover loop: preserved as ultimate fallback when all targets exhaust
+- Commands: all existing commands work

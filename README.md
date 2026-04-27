@@ -18,8 +18,9 @@ Unlike a simple model switcher, `auto-router` can retry the **same request** acr
 - **External JSON config** for route definitions and aliases
 - **Intelligent routing policy engine** — context analysis, `@` shortcuts, capability/constraint solving
 - **Per-provider budget tracking** with daily limits, persistent stats, and audit-driven failover
+- **Utilization Velocity Index (UVI)** — real-time OAuth quota monitoring that adjusts routing priority on the fly
 - **Routing decision explainer** so you can see why a target was selected
-- **Richer operator commands** for status, route inspection, search, aliases, reloads, budgets, and explanations
+- **Richer operator commands** for status, route inspection, search, aliases, reloads, budgets, UVI, and explanations
 
 ## Install
 
@@ -169,6 +170,7 @@ Skip it for providers that authenticate internally or don’t require pi-managed
 - `/auto-router explain [routeId]` — show the last routing decision (tier, target, confidence, reasoning)
 - `/auto-router shortcuts` — list available `@` shortcuts
 - `/auto-router budget [show|set <provider> <usd>|clear <provider>]` — view/manage daily per-provider budgets
+- `/auto-router uvi [show|enable|disable|refresh]` — view/manage Utilization Velocity Index monitoring
 - `/auto-router reload`
 - `/auto-router reset` — clears cooldowns, decision history, and budget warnings
 
@@ -187,6 +189,8 @@ Skip it for providers that authenticate internally or don’t require pi-managed
 /auto-router shortcuts
 /auto-router budget show
 /auto-router budget set google-antigravity 5.00
+/auto-router uvi show
+/auto-router uvi enable
 /auto-router reload
 ```
 
@@ -237,16 +241,88 @@ Manage budgets with:
 
 The selected target’s remaining daily budget is reported in `decision.metadata.budgetRemaining` and visible via `/auto-router explain`.
 
+### UVI interplay with budgets
+
+When UVI is enabled, the budget auditor layers **quota-based dynamic reallocation** on top of USD limits:
+
+| UVI status  | Threshold                        | Effect                                        |
+| ----------- | -------------------------------- | --------------------------------------------- |
+| `critical`  | UVI ≥ 2.0                        | **Blocks** the provider — excluded from routing |
+| `stressed`  | UVI ≥ 1.5                        | **Demotes** all targets from that provider to the end of the trial order |
+| `surplus`   | UVI ≤ 0.5 _and_ window ≥ 70% elapsed | **Promotes** targets to the front of the trial order |
+
+Critical UVI overrides a healthy USD budget. A provider with `UVI=2.0` is blocked even if it's only spent $0.20 of a $10.00 daily limit.
+
+UVI status also appears in `/auto-router budget` and `/auto-router explain` output.
+
+## Utilization Velocity Index (UVI)
+
+UVI measures how fast you're consuming OAuth quota windows and adjusts routing priority in real time. It fetches usage data from the provider quota APIs (`openai-codex`, `anthropic`, `google-gemini-cli`, `google-antigravity`) and computes:
+
+```
+UVI = consumed_fraction / elapsed_fraction_of_window
+```
+
+- **UVI ≈ 1.0** → on pace (e.g., 50% used at 50% elapsed)
+- **UVI ≥ 1.5** → burning fast — stressed (candidates demoted)
+- **UVI ≥ 2.0** → on track to exhaust early — critical (provider blocked)
+- **UVI ≤ 0.5** and window ≥ 70% elapsed → underutilized — surplus (candidates promoted)
+
+### Enabling UVI
+
+```text
+/auto-router uvi enable
+# or set the environment variable:
+# AUTO_ROUTER_UVI=1
+```
+
+UVI refreshes automatically before each prompt (throttled to once per 30 seconds). You can also force a refresh:
+
+```text
+/auto-router uvi refresh
+```
+
+### Viewing UVI state
+
+```text
+/auto-router uvi show
+```
+
+Example output:
+
+```text
+UVI (enabled):
+  anthropic              UVI= 1.64 stressed  | 5hr@38%, 7d@68%
+  openai-codex            UVI= 0.81 ok        | 1m@5%, 1d@61%
+  google-antigravity      UVI= 0.00 ok        | daily@1%
+  google-gemini-cli       UVI= 0.00 ok        | daily@1%
+```
+
+When a provider’s UVI is `stressed` or `critical`, it also appears in the status line:
+
+```text
+| uvi: anthropic=1.64 stressed
+```
+
+### Disabling
+
+```text
+/auto-router uvi disable
+```
+
+_Note: UVI requires valid OAuth tokens in `~/.pi/agent/auth.json`. If a token is expired and can't be refreshed, that provider shows an error in `uvi show`._
+
 ## Status line
 
 The status line surfaces routing state at a glance:
 
 ```text
-auto-router Subscription Premium Router | tier=reasoning (0.90) | current: Claude Opus 4.6 | healthy: …, … | ⚠ google-antigravity: 87% of $5.00 daily budget used
+auto-router Subscription Premium Router | tier=reasoning (0.90) | current: GPT-5.4 | healthy: …, … | ⚠ google-antigravity: 87% of $5.00 daily budget used | uvi: anthropic=1.64 stressed
 ```
 
 - `tier=<tier> (<confidence>)` appears once a routing decision has been recorded
 - `⚠ …` appears when one or more candidate providers are at 80%+ of their daily limit
+- `uvi: …` appears when one or more providers have `stressed` or `critical` UVI status
 
 ## Behavior notes
 
@@ -324,16 +400,20 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | `constraint-solver.ts`    | Filters candidates by capability, cooldown, and tier-derived requirements                            |
 | `policy-engine.ts`        | Priority-ordered rule registry with shadow mode + last-decision tracking                             |
 | `budget-tracker.ts`       | Persistent daily token/cost stats per provider with atomic writes; daily limits                      |
-| `budget-auditor.ts`       | Pure `auditBudget(provider, state)` returning `ok | warning | blocked`                               |
+| `budget-auditor.ts`       | Pure `auditBudget(provider, state)` returning `ok | warning | blocked`; integrates UVI for dynamic reallocation |
+| `uvi.ts`                  | Computes UVI from quota windows (`consumed_fraction / elapsed_fraction`); classifies as `critical`, `stressed`, `ok`, or `surplus` |
+| `quota-fetcher.ts`        | Pulls real-time usage data from OpenAI, Anthropic, and Google OAuth quota APIs; token refresh + error handling |
+| `quota-cache.ts`          | TTL-gated cache for quota snapshots; batches fetches, emits per-provider `UtilizationSnapshot`       |
 
 `index.ts` wires these together inside `streamAutoRouter`:
 
 1. Parse `@` shortcut from the last user message
 2. Build `RoutingContext` (prompt, history, healthy targets, budget state)
 3. Run `solveConstraints` over healthy targets with capability data from the model registry
-4. Run `auditBudget` per remaining candidate; drop blocked, warn at 80%+
-5. Record a `RoutingDecision` (phase, tier, target, confidence, reasoning, estimated tokens, budget remaining)
-6. Stream from the selected target with same-request failover; on success, record token usage
+4. Run `auditBudget` per remaining candidate; drop blocked, warn at 80%+; apply UVI-based demote/promote reordering
+5. Order candidates: `[…promoted (surplus UVI), …normal, …demoted (stressed UVI)]`
+6. Record a `RoutingDecision` (phase, tier, target, confidence, reasoning, estimated tokens, budget remaining)
+7. Stream from the selected target with same-request failover; on success, record token usage
 
 ## License
 
