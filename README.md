@@ -269,12 +269,20 @@ UVI = consumed_fraction / elapsed_fraction_of_window
 - **UVI ≥ 2.0** → on track to exhaust early — critical (provider blocked)
 - **UVI ≤ 0.5** and window ≥ 70% elapsed → underutilized — surplus (candidates promoted)
 
-### Enabling UVI
+### Enabling / Disabling UVI
+
+UVI is **enabled by default**. To opt out:
+
+```text
+/auto-router uvi disable
+# or set the environment variable:
+# AUTO_ROUTER_UVI=0
+```
+
+Re-enable:
 
 ```text
 /auto-router uvi enable
-# or set the environment variable:
-# AUTO_ROUTER_UVI=1
 ```
 
 UVI refreshes automatically before each prompt (throttled to once per 30 seconds). You can also force a refresh:

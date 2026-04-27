@@ -168,6 +168,8 @@ function envEnabled(): boolean {
   const raw = process.env.AUTO_ROUTER_UVI;
   if (raw) return raw === "1" || raw.toLowerCase() === "true" || raw.toLowerCase() === "on";
   // Fall back to persisted settings file so enabled state survives restarts.
+  // Default-on: if neither env var nor settings file has an explicit value,
+  // UVI is enabled. Opt out with AUTO_ROUTER_UVI=0 or /auto-router uvi disable.
   return readUviEnabledFromSettings();
 }
 
@@ -182,9 +184,15 @@ function readUviEnabledFromSettings(): boolean {
   try {
     const raw = fs.readFileSync(SETTINGS_PATH, "utf-8");
     const settings = JSON.parse(raw);
-    return settings?.autoRouterUviEnabled === true;
+    // Explicit check: only return true if the key exists and is true.
+    // If the key doesn't exist, default to true (enabled by default).
+    if ("autoRouterUviEnabled" in settings) {
+      return settings.autoRouterUviEnabled === true;
+    }
+    return true;
   } catch {
-    return false;
+    // File missing or corrupt — default to enabled.
+    return true;
   }
 }
 

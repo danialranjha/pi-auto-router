@@ -76,9 +76,9 @@ Phases 1–6 are **complete**. Phase 7 (UVI dynamic budget reallocation) is **sh
 | # | Feature | Effort | Impact |
 |---|---------|--------|--------|
 | 4 | **Performance-based ranking** — track `(provider, tier, contextSize) → p50/p95` latency; rank candidates by historical speed | Medium | High | ✅ |
-| 5 | **Default-on for UVI** — flip the default after real-world validation | Low | Medium |
+| 5 | **Default-on for UVI** — flip the default after real-world validation | Low | Medium | ✅ |
 
-### Tier 3: Speculative / Design-Heavy
+### Tier 3: Speculative / Design-Heavy (2 remaining)
 | # | Feature | Effort | Impact |
 |---|---------|--------|--------|
 | 6 | **User feedback loop** (`/auto-router rate <good|bad>`) — learn from user ratings over time | Medium | Medium |
