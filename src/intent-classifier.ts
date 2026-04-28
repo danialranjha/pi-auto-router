@@ -38,9 +38,9 @@ const CODE_PATTERNS: RegExp[] = [
   /^\s{2,}\S/m,                        // indented code
   /\/\*[\s\S]*?\*\//,                  // block comments
   /\/\/\s.*/,                          // line comments
-  /\.ts\b|\.js\b|\.py\b|\.rs\b|\.go\b/, // file extensions
+  /\.ts\b|\.js\b|\.py\b|\.rs\b|\.go\b|\.java\b|\.c\b|\.cpp\b|\.h\b/, // code file extensions
   /src\//,                             // source paths
-  /package\.json|Cargo\.toml|go\.mod/, // config files
+  /package\.json|Cargo\.toml|go\.mod|Makefile|Dockerfile/, // config files
   /\bgit\s+(clone|add|commit|push|pull|merge|rebase)\b/,
 ];
 
@@ -87,6 +87,8 @@ const ANALYSIS_PATTERNS: RegExp[] = [
   /\b(what|how|why)\s+(does|is|are|do|should|would|can|could)\b/i,
   /\b(compare|contrast|diff)\s+(the|these|between)\b/i,
   /^(can|could|would)\s+you\s+(review|analyze|explain|summarize)/im,
+  /\.md\b|\.rst\b|\.txt\b|\.adoc\b/,      // documentation file extensions
+  /\bREADME\b|CHANGELOG|CONTRIBUTING|LICENSE\b/,
 ];
 
 /**
@@ -99,17 +101,33 @@ export function classifyIntent(prompt: string, history?: Message[]): IntentResul
   const creativeScore = scoreCategory(text, CREATIVE_KEYWORDS, CREATIVE_ACTIONS, CREATIVE_PATTERNS, 2, 1.5);
   const analysisScore = scoreCategory(text, ANALYSIS_KEYWORDS, ANALYSIS_ACTIONS, ANALYSIS_PATTERNS, 2, 1.5);
 
+  // Conversation depth boost: long conversations suggest code/analysis intent
+  const historyLength = history?.length ?? 0;
+  let codeScoreFinal = codeScore;
+  let analysisScoreFinal = analysisScore;
+  if (historyLength >= 5) {
+    // Deep conversation — likely debugging or analysis
+    codeScoreFinal += 2;
+    analysisScoreFinal += 2;
+  } else if (historyLength >= 3) {
+    codeScoreFinal += 1;
+    analysisScoreFinal += 1;
+  }
+
   const reasons: string[] = [];
-  if (codeScore > 0) reasons.push(`code=${codeScore.toFixed(1)}`);
+  if (codeScoreFinal > 0) reasons.push(`code=${codeScoreFinal.toFixed(1)}`);
   if (creativeScore > 0) reasons.push(`creative=${creativeScore.toFixed(1)}`);
-  if (analysisScore > 0) reasons.push(`analysis=${analysisScore.toFixed(1)}`);
+  if (analysisScoreFinal > 0) reasons.push(`analysis=${analysisScoreFinal.toFixed(1)}`);
+  if (historyLength >= 3 && (codeScoreFinal > 0 || analysisScoreFinal > 0)) {
+    reasons.push(`depth=${historyLength} msgs`);
+  }
 
   // Determine category: highest score wins, with minimum threshold
   const MIN_SCORE = 2; // need at least 2 points for a non-general classification
   const scores: [IntentCategory, number][] = [
-    ["code", codeScore],
+    ["code", codeScoreFinal],
     ["creative", creativeScore],
-    ["analysis", analysisScore],
+    ["analysis", analysisScoreFinal],
   ];
   scores.sort((a, b) => b[1] - a[1]);
 

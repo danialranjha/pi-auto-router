@@ -109,3 +109,48 @@ describe("intentToTier", () => {
     assert.equal(intentToTier("general"), null);
   });
 });
+
+describe("classifyIntent — file extension awareness", () => {
+  it("classifies .java, .c, .cpp, .h as code", () => {
+    assert.equal(classifyIntent("fix Main.java").category, "code");
+    assert.equal(classifyIntent("refactor utils.c").category, "code");
+    assert.equal(classifyIntent("optimize algo.cpp").category, "code");
+    assert.equal(classifyIntent("update header.h").category, "code");
+  });
+
+  it("classifies .md and README as analysis", () => {
+    assert.equal(classifyIntent("review and update README.md").category, "analysis");
+    assert.equal(classifyIntent("explain what's in docs/guide.rst").category, "analysis");
+    assert.equal(classifyIntent("summarize the CHANGELOG changes").category, "analysis");
+  });
+
+  it("recognizes Dockerfile and Makefile as code", () => {
+    assert.equal(classifyIntent("update the Dockerfile").category, "code");
+    assert.equal(classifyIntent("fix Makefile targets").category, "code");
+  });
+});
+
+describe("classifyIntent — conversation depth", () => {
+  const mkMsg = (text: string): Message => ({ role: "user", content: text });
+
+  it("boosts code/analysis with deep conversation history (5+ msgs)", () => {
+    const history = [mkMsg("hello"), mkMsg("ok"), mkMsg("sure"), mkMsg("got it"), mkMsg("one more")];
+    // Prompt is short/ambiguous, but deep history suggests code intent
+    const r = classifyIntent("fix it", history);
+    // The depth boost (+2 to code and analysis) should push it over the threshold
+    assert.equal(r.category, "code");
+    assert.ok(r.reasons.some((s) => s.includes("depth=5")));
+  });
+
+  it("moderate history (3-4 msgs) gives smaller boost", () => {
+    const history = [mkMsg("a"), mkMsg("b"), mkMsg("c")];
+    const r = classifyIntent("what does this do?", history);
+    // "what does this do" is analysis → +1 from depth = enough for analysis
+    assert.equal(r.category, "analysis");
+  });
+
+  it("short history (0-2 msgs) has no depth boost", () => {
+    const r = classifyIntent("hi", [mkMsg("hello")]);
+    assert.equal(r.category, "general");
+  });
+});

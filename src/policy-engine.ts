@@ -22,6 +22,7 @@ export class PolicyEngine {
   readonly shadowMode: boolean;
   private lastDecision: RoutingDecision | null = null;
   private lastHints: { ruleName: string; hints: RoutingHints } | null = null;
+  private lastTrace: Array<{ name: string; priority: number; routeId?: string; matched: boolean; reason: string }> = [];
 
   constructor(options: PolicyEngineOptions = {}) {
     this.rules = [...(options.rules ?? [])].sort((a, b) => a.priority - b.priority);
@@ -55,6 +56,10 @@ export class PolicyEngine {
     return this.lastHints;
   }
 
+  getLastTrace(): ReadonlyArray<{ name: string; priority: number; routeId?: string; matched: boolean; reason: string }> {
+    return this.lastTrace;
+  }
+
   decide(ctx: RoutingContext): RoutingDecision | null {
     for (const rule of this.rules) {
       if (!rule.condition(ctx)) continue;
@@ -75,17 +80,29 @@ export class PolicyEngine {
   evaluateStrategy(ctx: RoutingContext): RoutingHints | null {
     let merged: RoutingHints | null = null;
     let matchedRuleName: string | undefined;
+    const trace: Array<{ name: string; priority: number; routeId?: string; matched: boolean; reason: string }> = [];
 
     for (const rule of this.strategyRules) {
       // Route scoping: skip rules that are scoped to a different route
-      if (rule.routeId !== undefined && rule.routeId !== ctx.routeId) continue;
-      if (!rule.condition(ctx)) continue;
+      if (rule.routeId !== undefined && rule.routeId !== ctx.routeId) {
+        trace.push({ name: rule.name, priority: rule.priority, routeId: rule.routeId, matched: false, reason: `route mismatch (rule scoped to ${rule.routeId})` });
+        continue;
+      }
+      if (!rule.condition(ctx)) {
+        trace.push({ name: rule.name, priority: rule.priority, routeId: rule.routeId, matched: false, reason: "condition not met" });
+        continue;
+      }
       const hints = rule.action(ctx);
-      if (!hints) continue;
+      if (!hints) {
+        trace.push({ name: rule.name, priority: rule.priority, routeId: rule.routeId, matched: false, reason: "action returned null" });
+        continue;
+      }
+      trace.push({ name: rule.name, priority: rule.priority, routeId: rule.routeId, matched: true, reason: "applied" });
       matchedRuleName = rule.name;
       merged = mergeHints(merged, hints);
     }
 
+    this.lastTrace = trace;
     if (merged && matchedRuleName) {
       this.lastHints = { ruleName: matchedRuleName, hints: merged };
     }
@@ -96,12 +113,14 @@ export class PolicyEngine {
   rebuildStrategyRules(rules: StrategyRule[]): void {
     this.strategyRules = [...rules].sort((a, b) => a.priority - b.priority);
     this.lastHints = null;
+    this.lastTrace = [];
   }
 
   /** Clear last decision and last hints (used on reset). */
   reset(): void {
     this.lastDecision = null;
     this.lastHints = null;
+    this.lastTrace = [];
   }
 }
 
@@ -170,8 +189,43 @@ function buildCondition(cond?: PolicyRuleConfig["condition"]): (ctx: RoutingCont
     }
     if (typeof cond.estimatedTokensMin === "number" && ctx.estimatedTokens < cond.estimatedTokensMin) return false;
     if (typeof cond.estimatedTokensMax === "number" && ctx.estimatedTokens > cond.estimatedTokensMax) return false;
+    // Time-of-day matching (local time)
+    if (cond.afterTime || cond.beforeTime) {
+      if (!isTimeInRange(cond.afterTime, cond.beforeTime)) return false;
+    }
+    // Day-of-week matching
+    if (cond.daysOfWeek && cond.daysOfWeek.length > 0) {
+      const today = new Date().getDay();
+      if (!cond.daysOfWeek.includes(today)) return false;
+    }
     return true;
   };
+}
+
+/**
+ * Check if the current local time falls within an optional range.
+ * Supports overnight ranges (e.g. afterTime="22:00", beforeTime="06:00").
+ * Exported for testing.
+ */
+export function isTimeInRange(afterTime?: string, beforeTime?: string, now?: Date): boolean {
+  const d = now ?? new Date();
+  const currentMinutes = d.getHours() * 60 + d.getMinutes();
+
+  const afterMinutes = afterTime ? parseHHMM(afterTime) : 0;
+  const beforeMinutes = beforeTime ? parseHHMM(beforeTime) : 1440; // end of day
+
+  if (afterMinutes <= beforeMinutes) {
+    // Normal range: e.g., 09:00 to 17:00
+    return currentMinutes >= afterMinutes && currentMinutes < beforeMinutes;
+  } else {
+    // Overnight range: e.g., 22:00 to 06:00
+    return currentMinutes >= afterMinutes || currentMinutes < beforeMinutes;
+  }
+}
+
+function parseHHMM(time: string): number {
+  const parts = time.split(":");
+  return parseInt(parts[0] ?? "0", 10) * 60 + parseInt(parts[1] ?? "0", 10);
 }
 
 function buildAction(c: PolicyRuleConfig): (ctx: RoutingContext) => RoutingHints | null {

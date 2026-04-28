@@ -24,6 +24,8 @@ import { LatencyTracker } from "./src/latency-tracker.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
+import { CircuitBreaker } from "./src/circuit-breaker.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import type { RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow, PolicyRuleConfig } from "./src/types.ts";
@@ -68,12 +70,14 @@ const lastAttemptByRoute = new Map<string, string>();
 const activeTargetByRoute = new Map<string, string>();
 const lastDecisionByRoute = new Map<string, RoutingDecision>();
 const lastShortcutByRoute = new Map<string, { shortcut: string; tier: Tier }>();
+const lastStrategyTraceByRoute = new Map<string, { rules: Array<{ name: string; matched: boolean }>; hints: RoutingDecision["reasoning"] | null }>();
 const lastBudgetWarningByRoute = new Map<string, string>();
 const budgetTracker = new BudgetTracker();
 const quotaCache = new QuotaCache();
 const latencyTracker = new LatencyTracker();
 const feedbackTracker = new FeedbackTracker();
 const policyEngine = new PolicyEngine();
+const circuitBreaker = new CircuitBreaker();
 const balanceCache = new Map<string, BalanceState>();
 let balanceLastRefreshAt = 0;
 let balanceFetchErrors: Record<string, string> = {};
@@ -303,16 +307,6 @@ let routesCache: Record<string, RouteDefinition> = DEFAULT_ROUTES;
 let aliasesCache: AliasConfig = DEFAULT_ALIASES;
 let configError: string | undefined;
 
-function parseModelSpec(spec: string): { provider: string; modelId: string } | null {
-  const normalized = spec.trim();
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= normalized.length - 1) return null;
-  const provider = normalized.slice(0, slashIndex).trim();
-  const modelId = normalized.slice(slashIndex + 1).trim();
-  if (!provider || !modelId) return null;
-  return { provider, modelId };
-}
-
 function getRouteName(modelId: string): string {
   return String(modelId ?? "").replace(/^subscription-/, "");
 }
@@ -364,10 +358,6 @@ function getTargetBilling(target: RouteTarget): BillingModel {
   return "subscription";
 }
 
-function describeTarget(target: RouteTarget | undefined | null): string {
-  if (!target) return "unknown target";
-  return `${target.label || "Unknown"} [${target.provider || "unknown"}/${target.modelId || "unknown"}]`;
-}
 
 function validateRouteTarget(target: unknown): target is RouteTarget {
   if (!target || typeof target !== "object") return false;
@@ -474,14 +464,6 @@ function rebuildPolicyEngine(): void {
     }
   }
   policyEngine.rebuildStrategyRules(allRules);
-}
-
-function normalizeModelToken(value: string): string {
-  return String(value ?? "")
-    .toLowerCase()
-    .replace(/:(cloud|latest|instruct)$/i, "")
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
 }
 
 function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model<Api> | undefined {
@@ -595,48 +577,8 @@ function isRetryableError(message: any): boolean {
   ].some((needle) => text.includes(needle));
 }
 
-function parseResetAfterMs(message: any): number | undefined {
-  const text = String(message ?? "");
-  const match = text.match(/reset after\s+(\d+)\s*(s|m|h|d|second|minute|hour|day)s?/i);
-  if (!match) return undefined;
-  const value = Number(match[1]);
-  const unit = match[2].toLowerCase()[0]; // Take the first character: s, m, h, d
-  if (!Number.isFinite(value) || value <= 0) return undefined;
-  const unitMs = unit === "s"
-    ? 1_000
-    : unit === "m"
-      ? 60_000
-      : unit === "h"
-        ? 60 * 60_000
-        : 24 * 60 * 60_000;
-  return value * unitMs;
-}
-
-function getCooldownMs(message: any): number {
-  const explicitResetMs = parseResetAfterMs(message);
-  if (explicitResetMs) return explicitResetMs + 5_000;
-
-  const text = String(message ?? "").toLowerCase();
-  if (text.includes("429") || text.includes("rate limit") || text.includes("too many requests")) return 2 * 60_000;
-  if (text.includes("quota") || text.includes("capacity") || text.includes("overloaded") || text.includes("503")) return 5 * 60_000;
-  // 404 / 410 / "not found" / "model not available" — model is gone, back off for an hour.
-  // Use word boundaries so "4040ms" / "version 404.x" don't match.
-  if (/\b(404|410)\b/.test(text) || text.includes("not found") || text.includes("model not available") || text.includes("gone")) return 60 * 60_000;
-  // 400 / "bad request" / context-length errors — payload-specific, brief cooldown so the next
-  // call (with a different payload) can still try this target.
-  if (/\b400\b/.test(text) || text.includes("bad request") || text.includes("maximum context length") || text.includes("context_length_exceeded")) return 30_000;
-  return 90_000;
-}
-
 function putOnCooldown(target: RouteTarget, reason: string) {
   cooldowns.set(getTargetKey(target), { until: Date.now() + getCooldownMs(reason), reason });
-}
-
-function formatRemainingMs(ms: number): string {
-  if (ms < 60_000) return `${Math.max(1, Math.ceil(ms / 1_000))}s`;
-  if (ms < 60 * 60_000) return `${Math.max(1, Math.ceil(ms / 60_000))}m`;
-  if (ms < 24 * 60 * 60_000) return `${Math.max(1, Math.ceil(ms / (60 * 60_000)))}h`;
-  return `${Math.max(1, Math.ceil(ms / (24 * 60 * 60_000)))}d`;
 }
 
 function getHealthyTargets(routeId: string): RouteTarget[] {
@@ -913,6 +855,23 @@ function lookupCapabilities(target: RouteTarget, context: Context): CapabilityMa
   };
 }
 
+/** Look up model cost from the registry. Returns { input, output } in USD per 1M tokens, or null. */
+function lookupModelCost(target: RouteTarget, context: Context): { inputUsd: number; outputUsd: number } | null {
+  const model = resolveModelFromRegistry(target, context);
+  if (!model) return null;
+  const cost = (model as any).cost;
+  if (!cost || typeof cost.input !== "number" || typeof cost.output !== "number") return null;
+  return { inputUsd: cost.input, outputUsd: cost.output };
+}
+
+/** Estimate cost for a target given estimated input tokens and a rough output multiplier (default 4×). */
+function estimateModelCost(target: RouteTarget, context: Context, estimatedInputTokens: number): number | null {
+  const cost = lookupModelCost(target, context);
+  if (!cost) return null;
+  const estimatedOutputTokens = estimatedInputTokens * 4;
+  return (estimatedInputTokens * cost.inputUsd + estimatedOutputTokens * cost.outputUsd) / 1_000_000;
+}
+
 function tierToRequirements(tier: Tier | undefined, estimatedTokens: number): ConstraintRequirements {
   const reqs: ConstraintRequirements = {};
   if (tier === "vision") reqs.vision = true;
@@ -975,6 +934,11 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       let effectiveTierFinal = effectiveTier;
       let filteredHealthy = healthy;
       const strategyHints = policyEngine.evaluateStrategy(ctx);
+      // Store evaluation trace for /auto-router explain
+      lastStrategyTraceByRoute.set(routeId, {
+        rules: policyEngine.getLastTrace().map((r) => ({ name: r.name, matched: r.matched })),
+        hints: strategyHints ? formatHintsHuman(strategyHints) : null,
+      });
       if (strategyHints) {
         // Apply tier override
         if (strategyHints.tierOverride) effectiveTierFinal = strategyHints.tierOverride;
@@ -1006,7 +970,10 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         capabilities: (t) => lookupCapabilities(t, context),
         isOnCooldown: (t) => {
           const c = cooldowns.get(getTargetKey(t));
-          return !!c && c.until > Date.now();
+          if (c && c.until > Date.now()) return true;
+          // Circuit breaker: skip providers with an open circuit
+          if (circuitBreaker.isOpen(t.provider)) return true;
+          return false;
         },
         isHealthy: (t) => healthCache.isHealthy(t.provider, t.authProvider),
       });
@@ -1016,19 +983,28 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       const budgetWarnings = partition.warnings;
       const uviNotes = partition.uviNotes;
 
-      // Sort within UVI buckets by historical latency (fastest first).
-      // Providers with no latency data sort last within their bucket.
-      const latencySort = (a: RouteTarget, b: RouteTarget): number => {
+      // Sort within UVI buckets: prefer → latency → cost → config order.
+      const rankedSort = (a: RouteTarget, b: RouteTarget): number => {
+        // 1. Providers with latency data first, unknowns last
         const la = latencyTracker.getAvgLatency(a.provider);
         const lb = latencyTracker.getAvgLatency(b.provider);
-        if (la === null && lb === null) return 0;
-        if (la === null) return 1;
-        if (lb === null) return -1;
-        return la - lb;
+        if (la === null && lb === null) {
+          // Both unknown — fall through to cost
+        } else if (la === null) return 1;
+        else if (lb === null) return -1;
+        else if (la !== lb) return la - lb;
+        // 2. Same latency — sort by estimated cost (cheaper first)
+        const ca = estimateModelCost(a, context, ctx.estimatedTokens);
+        const cb = estimateModelCost(b, context, ctx.estimatedTokens);
+        if (ca !== null && cb !== null && ca !== cb) return ca - cb;
+        // 3. One has cost data, the other doesn't — prefer the one we can price
+        if (ca !== null && cb === null) return -1;
+        if (ca === null && cb !== null) return 1;
+        return 0;
       };
-      partition.promoted.sort(latencySort);
-      partition.normal.sort(latencySort);
-      partition.demoted.sort(latencySort);
+      partition.promoted.sort(rankedSort);
+      partition.normal.sort(rankedSort);
+      partition.demoted.sort(rankedSort);
 
       // === PolicyEngine: apply post-partition hints (prefer/require providers) ===
       if (strategyHints?.requireProvider) {
@@ -1059,10 +1035,18 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           // Within same preference group, sort by latency
           const la = latencyTracker.getAvgLatency(a.provider);
           const lb = latencyTracker.getAvgLatency(b.provider);
-          if (la === null && lb === null) return 0;
-          if (la === null) return 1;
-          if (lb === null) return -1;
-          return la - lb;
+          if (la === null && lb === null) {
+            // fall through to cost
+          } else if (la === null) return 1;
+          else if (lb === null) return -1;
+          else if (la !== lb) return la - lb;
+          // Same latency — cheaper first
+          const ca = estimateModelCost(a, context, ctx.estimatedTokens);
+          const cb = estimateModelCost(b, context, ctx.estimatedTokens);
+          if (ca !== null && cb !== null && ca !== cb) return ca - cb;
+          if (ca !== null && cb === null) return -1;
+          if (ca === null && cb !== null) return 1;
+          return 0;
         };
         partition.promoted.sort(preferSort);
         partition.normal.sort(preferSort);
@@ -1157,6 +1141,10 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       if (latAvg !== null) {
         reasoningParts.push(`avg latency ${(latAvg / 1000).toFixed(1)}s`);
       }
+      const estCost = estimateModelCost(targets[0], context, ctx.estimatedTokens);
+      if (estCost !== null) {
+        reasoningParts.push(`est cost $${estCost.toFixed(4)}`);
+      }
       const billing = getTargetBilling(targets[0]);
       const selectedLimit = billing === "per-token"
         ? budgetState.monthlyLimit?.[targets[0].provider]
@@ -1187,6 +1175,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         if (result.success) {
           const elapsed = Date.now() - t0;
           latencyTracker.recordLatency(target.provider, elapsed);
+          circuitBreaker.recordSuccess(target.provider);
           try { latencyTracker.save(); } catch { /* ignore */ }
           if (result.lastMessage?.usage) {
             try {
@@ -1204,6 +1193,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           return;
         }
         if (result.retryableFailure) {
+          circuitBreaker.recordFailure(target.provider);
           errors.push(result.retryableFailure);
           continue;
         }
@@ -1244,7 +1234,8 @@ function getStatusLine(routeId?: string): string {
   const healthIssuesText = formatHealthIssuesSegment(healthy);
   const shadowText = shadowMode ? " 🔬 shadow" : "";
   const hardText = uviHardMode && quotaCache.isEnabled() ? " 🛡️ uvi-hard" : "";
-  return `auto-router ${getRouteName(routeId)}${tierHint}${shadowText}${hardText} | ${active} | healthy: ${healthy.join(", ") || "none"} | ${formatCooldowns(routeId)}${budgetText}${healthIssuesText}${uviText}`;
+  const circuitText = formatCircuitStatusSegment();
+  return `auto-router ${getRouteName(routeId)}${tierHint}${shadowText}${hardText} | ${active} | healthy: ${healthy.join(", ") || "none"} | ${formatCooldowns(routeId)}${budgetText}${healthIssuesText}${circuitText}${uviText}`;
 }
 
 function formatUviStatusSegment(): string {
@@ -1284,6 +1275,14 @@ function formatHealthIssuesSegment(healthy: Array<{ provider: string; authProvid
     if (err) issues.push(`${t.provider}: ${err}`);
   }
   return issues.length > 0 ? ` | ⚠ health: ${issues.join("; ")}` : "";
+}
+
+function formatCircuitStatusSegment(): string {
+  const dump = circuitBreaker.dump();
+  const open = Object.entries(dump).filter(([, s]) => s.state === "open" || s.state === "half-open");
+  if (open.length === 0) return "";
+  const parts = open.map(([provider, s]) => `${provider}=${s.state}(${s.failures}f)`);
+  return ` | 🔌 circuit: ${parts.join(", ")}`;
 }
 
 function refreshStatus(routeId?: string) {
@@ -1515,10 +1514,12 @@ export default function (pi: ExtensionAPI) {
         lastShortcutByRoute.clear();
         lastBudgetWarningByRoute.clear();
         lastShadowByRoute.clear();
+        lastStrategyTraceByRoute.clear();
         getProviderHealthCache().clear();
         latencyTracker.clear();
         feedbackTracker.clear();
         policyEngine.reset();
+        circuitBreaker.clear();
         balanceCache.clear();
         balanceFetchErrors = {};
         updateUi(ctx);
@@ -1831,6 +1832,18 @@ export default function (pi: ExtensionAPI) {
           shortcut ? `  shortcut:   ${shortcut.shortcut} (tier=${shortcut.tier})` : `  shortcut:   none`,
           `  reasoning:  ${decision.reasoning}`,
         ];
+        // Append strategy evaluation trace if available
+        const stratTrace = lastStrategyTraceByRoute.get(routeId);
+        if (stratTrace && stratTrace.rules.length > 0) {
+          lines.push("", "Strategy rules evaluated:");
+          for (const rule of stratTrace.rules) {
+            const marker = rule.matched ? "✅" : "❌";
+            lines.push(`  ${marker} ${rule.name}`);
+          }
+          if (stratTrace.hints) {
+            lines.push(`  → applied: ${stratTrace.hints}`);
+          }
+        }
         ctx.ui.notify(lines.join("\n"), "info");
         return;
       }
@@ -1878,6 +1891,25 @@ export default function (pi: ExtensionAPI) {
           lines.push(`Last applied: ${lastHints.ruleName}`);
           lines.push(`  hints: ${JSON.stringify(lastHints.hints)}`);
         }
+        ctx.ui.notify(lines.join("\n"), "info");
+        return;
+      }
+
+      if (subcommand === "circuit") {
+        const dump = circuitBreaker.dump();
+        const providers = Object.keys(dump);
+        if (providers.length === 0) {
+          ctx.ui.notify("Circuit breaker: no providers have been tracked yet (no failures recorded).", "info");
+          return;
+        }
+        const lines: string[] = ["Circuit breaker state:"];
+        for (const [provider, state] of Object.entries(dump)) {
+          const icon = state.state === "open" ? "🔴" : state.state === "half-open" ? "🟡" : "🟢";
+          const openedInfo = state.openedAt > 0 ? ` (opened ${Math.round((Date.now() - state.openedAt) / 1000)}s ago)` : "";
+          lines.push(`  ${icon} ${provider.padEnd(22)} ${state.state.padEnd(10)} failures=${state.failures}${openedInfo}`);
+        }
+        lines.push("", `Threshold: ${circuitBreaker.failureThreshold} failures within ${circuitBreaker.windowMs / 1000}s window, ${circuitBreaker.cooldownMs / 1000}s cooldown`);
+        lines.push("Reset: /auto-router reset");
         ctx.ui.notify(lines.join("\n"), "info");
         return;
       }

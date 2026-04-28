@@ -156,5 +156,11 @@ export type PolicyRuleConfig = {
     intent?: "code" | "creative" | "analysis" | "general";
     estimatedTokensMin?: number;
     estimatedTokensMax?: number;
+    /** HH:MM format in local time. Rule fires only after this time (inclusive). */
+    afterTime?: string;
+    /** HH:MM format in local time. Rule fires only before this time (exclusive). */
+    beforeTime?: string;
+    /** Day of week (0=Sun, 6=Sat). Rule fires only on these days. */
+    daysOfWeek?: number[];
   };
 };

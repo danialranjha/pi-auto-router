@@ -15,12 +15,15 @@ Unlike a simple model switcher, `auto-router` can retry the **same request** acr
 - **Subscription-first routing** across multiple providers
 - **Same-request failover** before substantive output starts
 - **Cooldown tracking** for temporarily failing providers/models
-- **External JSON config** for route definitions and aliases
-- **Intelligent routing policy engine** — context analysis, `@` shortcuts, capability/constraint solving
-- **Per-provider budget tracking** with daily limits, persistent stats, and audit-driven failover
+- **Circuit breaker** pattern for repeatedly failing providers (closed→open→half-open)
+- **External JSON config** for route definitions, aliases, **and policy rules**
+- **Intelligent routing policy engine** — context analysis, `@` shortcuts, capability/constraint solving, time-of-day/weekday rule conditions
+- **Policy rules** — force tiers, prefer/exclude providers, enforce billing/constraints, per-route scoping, dry-run traces
+- **Per-provider budget tracking** with daily/monthly limits, persistent stats, and audit-driven failover
 - **Utilization Velocity Index (UVI)** — real-time OAuth quota monitoring that adjusts routing priority on the fly
+- **Cost-aware ranking** — estimated USD cost as secondary tiebreaker within latency-sorted UVI buckets
 - **Routing decision explainer** so you can see why a target was selected
-- **Richer operator commands** for status, route inspection, search, aliases, reloads, budgets, UVI, and explanations
+- **Richer operator commands** for status, route inspection, search, aliases, reloads, budgets, UVI, rules, circuit status, and explanations
 
 ## Install
 
@@ -176,6 +179,7 @@ Skip it for providers that authenticate internally or don’t require pi-managed
 - `/auto-router uvi [show|enable|disable|refresh]` — view/manage Utilization Velocity Index monitoring
 - `/auto-router shadow [show|enable|disable]` — run pipeline in shadow mode (log but don't change routing)
 - `/auto-router rules` — show active policy rules and last applied strategy hints
+- `/auto-router circuit` — show circuit breaker state for all providers
 - `/auto-router reload`
 - `/auto-router reset` — clears cooldowns, decision history, and budget warnings
 
@@ -513,32 +517,54 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 
 | Module                    | Responsibility                                                                                       |
 | ------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `types.ts`                | Shared types: `Tier`, `RouteTarget`, `RoutingContext`, `RoutingDecision`, `BudgetState`, etc.        |
+| `types.ts`                | Shared types: `Tier`, `RouteTarget`, `RoutingContext`, `RoutingDecision`, `RoutingHints`, `PolicyRuleConfig`, etc. |
 | `context-analyzer.ts`     | Token estimation (`chars/4`), context classification (short/medium/long/epic), `RoutingContext` build |
 | `shortcut-parser.ts`      | Parses `@reasoning`/`@swe`/`@long`/`@vision`/`@fast` from prompts; strips the token before dispatch  |
-| `constraint-solver.ts`    | Filters candidates by capability, cooldown, and tier-derived requirements                            |
-| `policy-engine.ts`        | Priority-ordered rule registry with shadow mode + last-decision tracking                             |
-| `budget-tracker.ts`       | Persistent daily token/cost stats per provider with atomic writes; daily limits                      |
-| `budget-auditor.ts`       | Pure `auditBudget(provider, state)` returning `ok | warning | blocked`; integrates UVI for dynamic reallocation |
-| `balance-fetcher.ts`      | Fetches balances from pay-per-token providers (DeepSeek); builds synthetic monthly UVI windows                |
+| `constraint-solver.ts`    | Filters candidates by capability, cooldown, health, circuit breaker state, and tier-derived requirements |
+| `policy-engine.ts`        | Priority-ordered rule engine: 5 rule types (force-tier, prefer/exclude-provider, force-billing, force-constraint); time-of-day/weekday conditions; per-route scoping; dry-run traces via `/auto-router explain` |
+| `budget-tracker.ts`       | Persistent daily/monthly token/cost stats per provider with atomic writes; daily limits              |
+| `budget-auditor.ts`       | Pure `auditBudget(provider, state)` returning `ok \| warning \| blocked`; integrates UVI for dynamic reallocation |
+| `balance-fetcher.ts`      | Fetches balances from pay-per-token providers (DeepSeek) with exponential backoff retry; builds synthetic monthly UVI windows |
 | `uvi.ts`                  | Computes UVI from quota windows (`consumed_fraction / elapsed_fraction`); classifies as `critical`, `stressed`, `ok`, or `surplus` |
 | `quota-fetcher.ts`        | Pulls real-time usage data from OpenAI, Anthropic, and Google OAuth quota APIs; token refresh + error handling |
 | `quota-cache.ts`          | TTL-gated cache for quota snapshots; batches fetches, emits per-provider `UtilizationSnapshot`       |
 | `health-check.ts`         | Provider health cache — verifies OAuth tokens; independent of UVI; feeds `isHealthy` into constraint solver |
-| `candidate-partitioner.ts`| Partitions candidates into `[promoted, normal, demoted]` buckets based on budget audit + UVI; supports hard mode exclusion |
+| `circuit-breaker.ts`      | Circuit breaker state machine (closed→open→half-open) for repeatedly failing providers; `/auto-router circuit` command + status line segment |
+| `candidate-partitioner.ts`| Partitions candidates into `[promoted, normal, demoted]` buckets based on budget audit + UVI; supports hard mode exclusion; cost-aware secondary tiebreaker |
 | `latency-tracker.ts`      | Tracks per-provider request latency (rolling average, max 100 samples); used for performance-based ranking within UVI buckets |
-| `intent-classifier.ts`    | Heuristic intent classifier (code/creative/analysis/general); maps to tier hints when no @ shortcut is used |
-| `feedback-tracker.ts`    | User ratings of routing decisions (`/auto-router rate`); persists to auto-router.ratings.json; per-provider stats |
+| `intent-classifier.ts`    | Heuristic intent classifier (code/creative/analysis/general) with file extension, documentation pattern, and conversation depth awareness |
+| `feedback-tracker.ts`     | User ratings of routing decisions (`/auto-router rate`); persists to auto-router.ratings.json; per-provider stats |
+| `display.ts`              | Pure display utilities: model spec parsing, target description, hints formatting, cooldown helpers, token normalization |
 
 `index.ts` wires these together inside `streamAutoRouter`:
 
 1. Parse `@` shortcut from the last user message
-2. Build `RoutingContext` (prompt, history, healthy targets, budget state)
-3. Run `solveConstraints` over healthy targets with capability data from the model registry
-4. Run `auditBudget` per remaining candidate; drop blocked, warn at 80%+; apply UVI-based demote/promote reordering
-5. Order candidates: `[…promoted (surplus UVI), …normal, …demoted (stressed UVI)]`
-6. Record a `RoutingDecision` (phase, tier, target, confidence, reasoning, estimated tokens, budget remaining)
-7. Stream from the selected target with same-request failover; on success, record token usage
+2. Build `RoutingContext` (prompt, history, healthy targets, budget state, feedback stats)
+3. Run PolicyEngine pre-constraint evaluation (tier overrides, provider exclusions, constraint tuning)
+4. Run `solveConstraints` over healthy targets with capability data from the model registry
+5. Run `auditBudget` per remaining candidate; drop blocked, warn at 80%+; apply UVI-based demote/promote reordering
+6. Run PolicyEngine post-partition hints (requireProvider, preferProviders sorting, cost tiebreaker)
+7. Order candidates: `[…promoted (surplus UVI), …normal, …demoted (stressed UVI)]` with latency + cost sort
+8. Record a `RoutingDecision` (phase, tier, target, confidence, reasoning, estimated tokens, budget remaining, hints trace)
+9. Stream from the selected target with same-request failover; circuit breaker tracks success/failure
+
+## Roadmap
+
+High-priority future directions for `pi-auto-router`:
+
+| Area | Feature | Priority |
+|------|---------|----------|
+| **Policies** | [Feedback-driven rules](ROADMAP.md#1-feedback-driven-policy-rules) — wire user ratings into PolicyEngine conditions | ⭐⭐⭐ |
+| **Architecture** | [Continue extracting from `index.ts`](ROADMAP.md#2-architecture-continue-extracting-from-indexts) — testable modules for auth, config, cooldowns, model resolution | ⭐⭐⭐ |
+| **Testing** | [Performance benchmarks](ROADMAP.md#4-performance-microbenchmark-suite) + [Chaos testing](ROADMAP.md#5-stress--chaos-testing-suite) for the hot path | ⭐⭐⭐ |
+| **Provider support** | [Provider-agnostic UVI](ROADMAP.md#6-provider-agnostic-uvi) — custom/self-hosted providers get quota awareness | ⭐⭐ |
+| **Config** | [JSON Schema validation](ROADMAP.md#15-configuration-schema--validation) + [Export/import configs](ROADMAP.md#13-export--import-route-configurations) | ⭐⭐ |
+| **Advanced routing** | [Multi-step routing](ROADMAP.md#12-multi-step--sub-task-routing), [Weighted A/B selection](ROADMAP.md#10-weighted-random--ab-selection), [ML intent classifier](ROADMAP.md#11-machine-learning-intent-classifier) | ⭐ |
+| **Observability** | [Web dashboard / TUI integration](ROADMAP.md#9-web-dashboard--tui-integration), [Resilience dashboard](ROADMAP.md#14-provider-resilience-dashboard) | ⭐ |
+
+See [ROADMAP.md](./ROADMAP.md) for full details on each item.
+
+---
 
 ## License
 

@@ -5,6 +5,35 @@
 
 import type { BalanceState } from "./types.ts";
 
+// ─── Retry helper ────────────────────────────────────────────────────────────
+
+/**
+ * Retry an async function with exponential backoff.
+ * Retries on any error (network failures, timeouts, non-2xx responses).
+ */
+export async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  options: { maxRetries?: number; baseDelayMs?: number; maxDelayMs?: number } = {},
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? 2;
+  const baseDelayMs = options.baseDelayMs ?? 500;
+  const maxDelayMs = options.maxDelayMs ?? 4_000;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries) {
+        const delay = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+  throw lastError;
+}
+
 // ─── Known balance endpoints ─────────────────────────────────────────────────
 
 export const BALANCE_ENDPOINTS: Record<string, string> = {
@@ -25,13 +54,16 @@ export type BalanceFetchResult = {
 // ─── Per-provider fetchers ───────────────────────────────────────────────────
 
 async function fetchDeepSeekBalance(apiKey: string): Promise<Omit<BalanceFetchResult, "provider">> {
-  const response = await fetch("https://api.deepseek.com/user/balance", {
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    signal: AbortSignal.timeout(12_000),
-  });
+  const response = await retryWithBackoff(
+    () => fetch("https://api.deepseek.com/user/balance", {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: AbortSignal.timeout(12_000),
+    }),
+    { maxRetries: 2, baseDelayMs: 500 },
+  );
 
   if (!response.ok) {
     return {
