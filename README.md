@@ -4,8 +4,10 @@ A subscription-first automatic model/provider failover extension for [pi coding 
 
 It exposes a custom provider with opinionated routing profiles:
 
-- `auto-router/subscription-premium`
-- `auto-router/subscription-coding`
+- `auto-router/subscription-reasoning`
+- `auto-router/subscription-swe`
+- `auto-router/subscription-long-context`
+- `auto-router/subscription-economy`
 - `auto-router/subscription-fast`
 
 Unlike a simple model switcher, `auto-router` can retry the **same request** across a configured route chain when a provider hits retryable failures like rate limits, temporary overload, or transient network/server errors.
@@ -68,8 +70,10 @@ pi -e git:github.com/danialranjha/pi-auto-router
 2. Reload pi with `/reload`
 3. Open `/model`
 4. Select one of:
-   - `auto-router/subscription-premium`
-   - `auto-router/subscription-coding`
+   - `auto-router/subscription-reasoning`
+   - `auto-router/subscription-swe`
+   - `auto-router/subscription-long-context`
+   - `auto-router/subscription-economy`
    - `auto-router/subscription-fast`
 5. Inspect routing with:
 
@@ -105,41 +109,42 @@ cp auto-router.routes.example.json ~/.pi/agent/extensions/auto-router.routes.jso
 ```json
 {
   "routes": {
-    "subscription-premium": {
-      "name": "Subscription Premium Router",
+    "subscription-reasoning": {
+      "name": "Reasoning & Agentic Router",
       "reasoning": true,
       "input": ["text", "image"],
       "targets": [
         {
           "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-6",
-          "label": "Claude Opus 4.6 via Claude Code"
+          "modelId": "claude-opus-4-7",
+          "label": "L1: Claude Opus 4.7 (Frontier)"
         },
         {
           "provider": "google-antigravity",
           "modelId": "gemini-3.1-pro-high",
           "authProvider": "google-antigravity",
-          "label": "Gemini 3.1 Pro"
+          "label": "L2: Gemini 3.1 Pro (Multimodal Logic)"
         },
         {
           "provider": "openai-codex",
           "modelId": "gpt-5.4",
           "authProvider": "openai-codex",
-          "label": "GPT-5.4"
+          "label": "L3: GPT-5.4"
         },
         {
           "provider": "ollama",
           "modelId": "glm-5.1:cloud",
-          "label": "GLM-5.1 via Ollama Cloud Subscription"
+          "label": "L4: GLM-5.1 (Ollama Cloud Last Resort)"
         }
       ]
     }
   },
   "aliases": {
-    "premium": ["auto-router/subscription-premium"],
+    "reasoning": ["auto-router/subscription-reasoning"],
+    "swe": ["auto-router/subscription-swe"],
     "claude": [
-      "claude-agent-sdk/claude-opus-4-6",
-      "claude-agent-sdk/claude-opus-4-5"
+      "claude-agent-sdk/claude-opus-4-7",
+      "claude-agent-sdk/claude-opus-4-6"
     ]
   }
 }
@@ -186,14 +191,14 @@ Skip it for providers that authenticate internally or don’t require pi-managed
 ### Example operator flows
 
 ```text
-/auto-router switch premium
+/auto-router switch reasoning
 /auto-router switch claude
-/auto-router switch subscription-fast
+/auto-router switch subscription-swe
 /auto-router list
-/auto-router show subscription-premium
+/auto-router show subscription-reasoning
 /auto-router search gemini
 /auto-router aliases
-/auto-router resolve premium
+/auto-router resolve reasoning
 /auto-router explain
 /auto-router shortcuts
 /auto-router budget show
@@ -401,7 +406,7 @@ Once enabled, the status line shows `🔬 shadow`. Use `/auto-router shadow show
 Shadow mode: 🟢 enabled
 
 Last shadow comparison:
-  Route: subscription-premium
+  Route: subscription-reasoning
     Pipeline would pick: Gemini 3.1 Pro → Claude Opus 4.6 → GPT-5.4
     Actually used:      Claude Opus 4.6 → Gemini 3.1 Pro → GPT-5.4
     Match: ❌ different

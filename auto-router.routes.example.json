@@ -1,111 +1,225 @@
 {
-  "_comment_policyRules": "Add a 'policyRules' array to any route to configure routing strategy. Available types: force-tier, prefer-provider, exclude-provider, force-billing, force-constraint.",
+  "_comment_policyRules": "Add a 'policyRules' array to configure routing strategy. Available types: force-tier, prefer-provider, exclude-provider, force-billing, force-constraint. Optional fields: routeId (scope to one route), afterTime/beforeTime/daysOfWeek (time-of-day conditions).",
   "_example_policyRules": [
     { "name": "force-reasoning-for-code", "type": "force-tier", "tier": "reasoning", "priority": 1, "condition": { "intent": "code" } },
     { "name": "prefer-claude", "type": "prefer-provider", "provider": "claude-agent-sdk", "priority": 10 },
     { "name": "exclude-deepseek-creative", "type": "exclude-provider", "provider": "deepseek", "priority": 1, "condition": { "intent": "creative" } },
     { "name": "per-token-for-large", "type": "force-billing", "billing": "per-token", "priority": 1, "condition": { "estimatedTokensMin": 10000 } },
-    { "name": "require-vision", "type": "force-constraint", "constraint": { "vision": true }, "priority": 1 }
+    { "name": "require-vision", "type": "force-constraint", "constraint": { "vision": true }, "priority": 1 },
+    { "name": "block-claude-after-7pm", "type": "exclude-provider", "provider": "claude-agent-sdk", "afterTime": "19:00", "routeId": "subscription-reasoning" },
+    { "name": "weekend-economy", "type": "force-tier", "tier": "economy", "daysOfWeek": [0, 6] }
   ],
   "routes": {
-    "subscription-premium": {
-      "name": "Subscription Premium Router",
+    "subscription-reasoning": {
+      "name": "Reasoning & Agentic Router",
       "reasoning": true,
       "input": ["text", "image"],
+      "contextWindow": 200000,
+      "maxTokens": 128000,
       "targets": [
         {
           "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-6",
-          "label": "Claude Opus 4.6 via Claude Code"
-        },
-        {
-          "provider": "google-antigravity",
-          "modelId": "gemini-3.1-pro-high",
-          "authProvider": "google-antigravity",
-          "label": "Gemini 3.1 Pro"
-        },
-        {
-          "provider": "openai-codex",
-          "modelId": "gpt-5.4",
-          "authProvider": "openai-codex",
-          "label": "GPT-5.4"
-        },
-        {
-          "provider": "ollama",
-          "modelId": "glm-5.1:cloud",
-          "label": "GLM-5.1 via Ollama Cloud Subscription"
-        }
-      ]
-    },
-    "subscription-coding": {
-      "name": "Subscription Coding Router",
-      "reasoning": true,
-      "input": ["text", "image"],
-      "targets": [
-        {
-          "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-6",
-          "label": "Claude Opus 4.6 via Claude Code"
-        },
-        {
-          "provider": "openai-codex",
-          "modelId": "gpt-5.4",
-          "authProvider": "openai-codex",
-          "label": "GPT-5.4"
-        },
-        {
-          "provider": "google-antigravity",
-          "modelId": "gemini-3.1-pro-high",
-          "authProvider": "google-antigravity",
-          "label": "Gemini 3.1 Pro"
+          "modelId": "claude-opus-4-7",
+          "label": "L1: Claude Opus 4.7 (Frontier)"
         },
         {
           "provider": "deepseek",
-          "modelId": "deepseek-chat",
-          "label": "DeepSeek V3 (direct)",
-          "billing": "per-token"
+          "modelId": "deepseek-v4-pro",
+          "authProvider": "deepseek",
+          "label": "L2: DeepSeek V4 Pro Reasoner (Direct API)"
         },
         {
-          "provider": "nvidia",
-          "modelId": "deepseek-ai/deepseek-v3.2",
-          "label": "DeepSeek v3.2 via NVIDIA"
+          "provider": "openai-codex",
+          "modelId": "gpt-5.4",
+          "authProvider": "openai-codex",
+          "label": "L3: GPT-5.4"
         },
         {
-          "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-5",
-          "label": "Claude Opus 4.5 via Claude Code"
+          "provider": "google-antigravity",
+          "modelId": "gemini-3.1-pro-high",
+          "authProvider": "google-antigravity",
+          "label": "L4: Gemini 3.1 Pro (Multimodal Logic)"
         },
         {
           "provider": "ollama",
           "modelId": "glm-5.1:cloud",
-          "label": "GLM-5.1 via Ollama Cloud Subscription"
+          "label": "L5: GLM-5.1 (Ollama Cloud Last Resort)"
+        }
+      ]
+    },
+    "subscription-swe": {
+      "name": "Software Engineering Router",
+      "reasoning": true,
+      "input": ["text", "image"],
+      "contextWindow": 200000,
+      "maxTokens": 128000,
+      "targets": [
+        {
+          "provider": "claude-agent-sdk",
+          "modelId": "claude-opus-4-7",
+          "label": "L1: Claude Opus 4.7 (Top SWE)"
+        },
+        {
+          "provider": "deepseek",
+          "modelId": "deepseek-v4-pro",
+          "authProvider": "deepseek",
+          "label": "L2: DeepSeek V4 Pro Coder (Direct API)"
+        },
+        {
+          "provider": "openai-codex",
+          "modelId": "gpt-5.4",
+          "authProvider": "openai-codex",
+          "label": "L3: GPT-5.4 (Alternative SOTA)"
+        },
+        {
+          "provider": "google-antigravity",
+          "modelId": "gemini-3.1-pro-high",
+          "authProvider": "google-antigravity",
+          "label": "L4: Gemini 3.1 Pro (Frontier Fallback)"
+        },
+        {
+          "provider": "ollama",
+          "modelId": "glm-5.1:cloud",
+          "label": "L5: GLM-5.1 (Ollama Cloud)"
+        },
+        {
+          "provider": "nvidia",
+          "modelId": "minimaxai/minimax-m2.7",
+          "authProvider": "nvidia",
+          "label": "L6: MiniMax M2.7 (NVIDIA NIM)"
+        },
+        {
+          "provider": "claude-agent-sdk",
+          "modelId": "claude-sonnet-4-6",
+          "label": "L7: Claude Sonnet 4.6 (Efficiency Fallback)"
+        },
+        {
+          "provider": "deepseek",
+          "modelId": "deepseek-v4-flash",
+          "authProvider": "deepseek",
+          "label": "L8: DeepSeek V4 Chat (High Throughput)"
+        }
+      ]
+    },
+    "subscription-long-context": {
+      "name": "Long-Context & Research Router",
+      "reasoning": true,
+      "input": ["text", "image"],
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "targets": [
+        {
+          "provider": "google-antigravity",
+          "modelId": "gemini-3.1-pro-high",
+          "authProvider": "google-antigravity",
+          "label": "L1: Gemini 3.1 Pro (1.5M Context)"
+        },
+        {
+          "provider": "claude-agent-sdk",
+          "modelId": "claude-opus-4-7",
+          "label": "L2: Claude Opus 4.7 (1M Context)"
+        },
+        {
+          "provider": "nvidia",
+          "modelId": "z-ai/glm-5.1",
+          "authProvider": "nvidia",
+          "label": "L3: GLM 5.1 (1M Context NVIDIA)"
+        },
+        {
+          "provider": "deepseek",
+          "modelId": "deepseek-v4-flash",
+          "authProvider": "deepseek",
+          "label": "L4: DeepSeek V4 (1M Context Direct)"
+        }
+      ]
+    },
+    "subscription-economy": {
+      "name": "Economy Router (Protect Subscriptions)",
+      "reasoning": true,
+      "input": ["text", "image"],
+      "contextWindow": 128000,
+      "maxTokens": 65536,
+      "targets": [
+        {
+          "provider": "deepseek",
+          "modelId": "deepseek-v4-flash",
+          "authProvider": "deepseek",
+          "label": "L1: DeepSeek V4 Chat (Direct API - Cheap)"
+        },
+        {
+          "provider": "nvidia",
+          "modelId": "z-ai/glm-5.1",
+          "authProvider": "nvidia",
+          "label": "L2: GLM 5.1 (NVIDIA NIM)"
+        },
+        {
+          "provider": "google-antigravity",
+          "modelId": "gemini-3-flash",
+          "authProvider": "google-antigravity",
+          "label": "L3: Gemini 3 Flash (Fast/Cheap)"
+        },
+        {
+          "provider": "claude-agent-sdk",
+          "modelId": "claude-sonnet-4-5",
+          "label": "L4: Claude Sonnet 4.5 (Sub Fallback)"
+        }
+      ]
+    },
+    "subscription-fast": {
+      "name": "Fast & Everyday Router",
+      "reasoning": false,
+      "input": ["text", "image"],
+      "contextWindow": 64000,
+      "maxTokens": 16384,
+      "targets": [
+        {
+          "provider": "google-antigravity",
+          "modelId": "gemini-3-flash",
+          "authProvider": "google-antigravity",
+          "label": "L1: Gemini 3 Flash"
+        },
+        {
+          "provider": "claude-agent-sdk",
+          "modelId": "claude-sonnet-4-6",
+          "label": "L2: Claude Sonnet 4.6"
+        },
+        {
+          "provider": "deepseek",
+          "modelId": "deepseek-v4-flash",
+          "authProvider": "deepseek",
+          "label": "L3: DeepSeek V4 Chat"
+        },
+        {
+          "provider": "openai-codex",
+          "modelId": "gpt-5.4-mini",
+          "authProvider": "openai-codex",
+          "label": "L4: GPT-5.4 Mini"
         }
       ]
     }
   },
   "aliases": {
-    "premium": ["auto-router/subscription-premium"],
+    "reasoning": ["auto-router/subscription-reasoning"],
+    "swe": ["auto-router/subscription-swe"],
+    "long": ["auto-router/subscription-long-context"],
+    "economy": ["auto-router/subscription-economy"],
+    "fast": ["auto-router/subscription-fast"],
     "claude": [
-      "claude-agent-sdk/claude-opus-4-6",
-      "claude-agent-sdk/claude-opus-4-5"
+      "claude-agent-sdk/claude-opus-4-7",
+      "claude-agent-sdk/claude-opus-4-6"
     ],
     "gemini": [
       "google-antigravity/gemini-3.1-pro-high",
       "google-antigravity/gemini-3-flash"
     ],
     "deepseek": [
-      "deepseek/deepseek-chat",
-      "nvidia/deepseek-ai/deepseek-v3.2"
-    ],
-    "nvidia": [
-      "nvidia/deepseek-ai/deepseek-v3.2"
+      "deepseek/deepseek-v4-pro",
+      "deepseek/deepseek-v4-flash"
     ],
     "codex": [
       "openai-codex/gpt-5.4",
-      "openai-codex/gpt-5.2-codex"
+      "openai-codex/gpt-5.4-mini"
     ],
-    "glm": [
-      "ollama/glm-5.1:cloud"
-    ]
+    "glm": ["ollama/glm-5.1:cloud"]
   }
 }
