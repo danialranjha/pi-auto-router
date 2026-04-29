@@ -985,24 +985,25 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       const budgetWarnings = partition.warnings;
       const uviNotes = partition.uviNotes;
 
-      // Sort within UVI buckets: prefer → latency → cost → config order.
+      // Sort within UVI buckets: latency → cost → config order.
+      // Build a config-order index so we can break ties by priority (L1 before L8).
+      const configIndex = new Map(ctx.availableTargets.map((t, i) => [getTargetKey(t), i]));
       const rankedSort = (a: RouteTarget, b: RouteTarget): number => {
-        // 1. Providers with latency data first, unknowns last
+        // 1. Both have latency data — compare directly (lower is better)
         const la = latencyTracker.getAvgLatency(a.provider);
         const lb = latencyTracker.getAvgLatency(b.provider);
-        if (la === null && lb === null) {
-          // Both unknown — fall through to cost
-        } else if (la === null) return 1;
-        else if (lb === null) return -1;
-        else if (la !== lb) return la - lb;
-        // 2. Same latency — sort by estimated cost (cheaper first)
+        if (la !== null && lb !== null && la !== lb) return la - lb;
+        // 2. One or both have unknown latency — sort by estimated cost (cheaper first)
         const ca = estimateModelCost(a, context, ctx.estimatedTokens);
         const cb = estimateModelCost(b, context, ctx.estimatedTokens);
         if (ca !== null && cb !== null && ca !== cb) return ca - cb;
         // 3. One has cost data, the other doesn't — prefer the one we can price
         if (ca !== null && cb === null) return -1;
         if (ca === null && cb !== null) return 1;
-        return 0;
+        // 4. Everything tied — preserve config order (L1 before L8)
+        const ia = configIndex.get(getTargetKey(a)) ?? 999;
+        const ib = configIndex.get(getTargetKey(b)) ?? 999;
+        return ia - ib;
       };
       partition.promoted.sort(rankedSort);
       partition.normal.sort(rankedSort);
