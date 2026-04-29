@@ -679,7 +679,9 @@ async function tryTarget(
 ): Promise<{ success: boolean; retryableFailure?: string; terminalError?: AssistantMessage; lastMessage?: AssistantMessage }> {
   activeTargetByRoute.set(outerModel.id, describeTarget(target));
   refreshStatus(outerModel.id);
-  const token = target.authProvider ? getAccessToken(target.authProvider) : undefined;
+  let token = target.authProvider ? getAccessToken(target.authProvider) : undefined;
+  // Fall back to environment variables for providers without authProvider (e.g. ollama)
+  if (!token) token = resolveProviderApiKeyFromEnv(target.provider);
   
   if (target.authProvider && !token) {
     const message = `${target.label}: no valid subscription token`;
