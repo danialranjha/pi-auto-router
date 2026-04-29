@@ -164,3 +164,38 @@ export type PolicyRuleConfig = {
     daysOfWeek?: number[];
   };
 };
+
+/**
+ * A single routing decision log entry, persisted as a JSONL line.
+ * Flat structure for easy querying with jq, grep, or analytical tools.
+ */
+export type DecisionLogEntry = {
+  /** Epoch ms when the decision was made */
+  timestamp: number;
+  /** The route ID (model id) that was being routed */
+  routeId: string;
+  /** Routing tier (swe, reasoning, fast, vision, long, economy) */
+  tier: string;
+  /** Phase: "shortcut", "default", or "policy" */
+  phase: string;
+  /** The provider that was selected */
+  provider: string;
+  /** The model ID that was selected */
+  modelId: string;
+  /** Human-readable target label */
+  targetLabel: string;
+  /** Full reasoning string (shortcut info, intent, budget, strategy hints) */
+  reasoning: string;
+  /** Estimated token count for this request */
+  estimatedTokens: number;
+  /** Budget remaining for the selected billing scope (USD) */
+  budgetRemaining: number;
+  /** Confidence score (0.0–1.0) */
+  confidence: number;
+  /** Outcome of the routing attempt */
+  outcome: "success" | "terminal_error" | "exhausted";
+  /** Latency in ms of the successful call, or 0 on failure */
+  latencyMs: number;
+  /** Which target actually handled the request (label or error summary) */
+  selectedTarget: string;
+};

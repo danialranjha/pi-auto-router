@@ -28,7 +28,8 @@ import { CircuitBreaker } from "./src/circuit-breaker.ts";
 import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
-import type { RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow, PolicyRuleConfig } from "./src/types.ts";
+import { DecisionLogger } from "./src/decision-logger.ts";
+import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow, PolicyRuleConfig } from "./src/types.ts";
 
 const PROVIDER_ID = "auto-router";
 const AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
@@ -78,6 +79,7 @@ const latencyTracker = new LatencyTracker();
 const feedbackTracker = new FeedbackTracker();
 const policyEngine = new PolicyEngine();
 const circuitBreaker = new CircuitBreaker();
+const decisionLogger = new DecisionLogger();
 const balanceCache = new Map<string, BalanceState>();
 let balanceLastRefreshAt = 0;
 let balanceFetchErrors: Record<string, string> = {};
@@ -1168,12 +1170,20 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       };
       recordDecision(routeId, decision);
 
+      // Track outcomes for the decision log
+      let finalOutcome: DecisionLogEntry["outcome"] | null = null;
+      let finalLatencyMs = 0;
+      let finalSelectedTarget = "";
+
       for (const target of targets) {
         lastAttemptByRoute.set(routeId, target.label);
         const t0 = Date.now();
         const result = await tryTarget(outer, model, target, context, options);
         if (result.success) {
           const elapsed = Date.now() - t0;
+          finalOutcome = "success";
+          finalLatencyMs = elapsed;
+          finalSelectedTarget = target.label;
           latencyTracker.recordLatency(target.provider, elapsed);
           circuitBreaker.recordSuccess(target.provider);
           try { latencyTracker.save(); } catch { /* ignore */ }
@@ -1189,17 +1199,54 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           }
           activeTargetByRoute.delete(routeId);
           refreshStatus(routeId);
+          // Log the decision with its outcome
+          decisionLogger.log({
+            timestamp: Date.now(),
+            routeId,
+            tier: decision.tier,
+            phase: decision.phase,
+            provider: decision.target.provider,
+            modelId: decision.target.modelId,
+            targetLabel: decision.target.label,
+            reasoning: decision.reasoning,
+            estimatedTokens: decision.metadata.estimatedTokens,
+            budgetRemaining: decision.metadata.budgetRemaining,
+            confidence: decision.metadata.confidence,
+            outcome: finalOutcome,
+            latencyMs: finalLatencyMs,
+            selectedTarget: finalSelectedTarget,
+          });
           outer.end();
           return;
         }
         if (result.retryableFailure) {
           circuitBreaker.recordFailure(target.provider);
           errors.push(result.retryableFailure);
+          finalSelectedTarget = target.label;
           continue;
         }
         if (result.terminalError) {
+          finalOutcome = "terminal_error";
+          finalSelectedTarget = target.label;
           activeTargetByRoute.delete(routeId);
           refreshStatus(routeId);
+          // Log the decision with terminal outcome
+          decisionLogger.log({
+            timestamp: Date.now(),
+            routeId,
+            tier: decision.tier,
+            phase: decision.phase,
+            provider: decision.target.provider,
+            modelId: decision.target.modelId,
+            targetLabel: decision.target.label,
+            reasoning: decision.reasoning,
+            estimatedTokens: decision.metadata.estimatedTokens,
+            budgetRemaining: decision.metadata.budgetRemaining,
+            confidence: decision.metadata.confidence,
+            outcome: finalOutcome,
+            latencyMs: 0,
+            selectedTarget: finalSelectedTarget,
+          });
           outer.end();
           return;
         }
@@ -1207,6 +1254,23 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 
       activeTargetByRoute.delete(routeId);
       refreshStatus(routeId);
+      // Log exhausted outcome
+      decisionLogger.log({
+        timestamp: Date.now(),
+        routeId,
+        tier: decision.tier,
+        phase: decision.phase,
+        provider: decision.target.provider,
+        modelId: decision.target.modelId,
+        targetLabel: decision.target.label,
+        reasoning: decision.reasoning,
+        estimatedTokens: decision.metadata.estimatedTokens,
+        budgetRemaining: decision.metadata.budgetRemaining,
+        confidence: decision.metadata.confidence,
+        outcome: "exhausted",
+        latencyMs: 0,
+        selectedTarget: errors.length ? errors.join(" | ") : "all targets exhausted",
+      });
       outer.push({ type: "error", reason: "error", error: buildCombinedError(model, routeId, errors.length ? errors : ["all targets exhausted"]) });
       outer.end();
     } catch (error) {
@@ -1518,6 +1582,7 @@ export default function (pi: ExtensionAPI) {
         getProviderHealthCache().clear();
         latencyTracker.clear();
         feedbackTracker.clear();
+        decisionLogger.clear();
         policyEngine.reset();
         circuitBreaker.clear();
         balanceCache.clear();
@@ -1914,6 +1979,134 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      if (subcommand === "decisions") {
+        const [actionRaw, ...actionRest] = remainder ? remainder.split(/\s+/) : [];
+        const action = String(actionRaw ?? "recent").toLowerCase();
+
+        if (action === "recent" || action === "list") {
+          const limit = parseInt(actionRest[0] ?? "10", 10);
+          if (isNaN(limit) || limit < 1 || limit > 500) {
+            ctx.ui.notify("Usage: /auto-router decisions recent [count=10]", "error");
+            return;
+          }
+          const recent = decisionLogger.getRecent(limit);
+          if (recent.length === 0) {
+            ctx.ui.notify("No routing decisions logged yet. Send a prompt first.", "info");
+            return;
+          }
+          const lines = recent.map((e, i) => {
+            const ts = new Date(e.timestamp).toLocaleTimeString();
+            const icon = e.outcome === "success" ? "✅" : e.outcome === "terminal_error" ? "❌" : "⚠️";
+            return `  ${String(i + 1).padEnd(3)} ${icon} ${ts.padEnd(11)} ${e.tier.padEnd(10)} ${e.targetLabel.padEnd(28)} ${e.outcome}${e.outcome === "success" ? ` (${e.latencyMs}ms)` : ""}`;
+          });
+          ctx.ui.notify([
+            `Routing decisions (last ${recent.length}):`,
+            `  ${recent.length > 0 ? `Path: ${decisionLogger.logFilePath}` : ""}`,
+            `  Total logged: ${decisionLogger.count}`,
+            "",
+            ...lines,
+          ].join("\n"), "info");
+          return;
+        }
+
+        if (action === "stats") {
+          const providerStats = decisionLogger.getProviderStats();
+          const tierStats = decisionLogger.getTierStats();
+          const providerLines = Object.entries(providerStats)
+            .sort(([, a], [, b]) => b.attempts - a.attempts)
+            .map(([provider, s]) => {
+              const rate = s.attempts > 0 ? ((s.successes / s.attempts) * 100).toFixed(0) : "-";
+              return `  ${provider.padEnd(22)} attempts=${s.attempts} success=${rate}% avg=${s.avgLatencyMs}ms`;
+            });
+          const tierLines = Object.entries(tierStats)
+            .sort(([, a], [, b]) => b.count - a.count)
+            .map(([tier, s]) => {
+              return `  ${tier.padEnd(12)} count=${String(s.count).padEnd(4)} success=${(s.successRate * 100).toFixed(0)}% conf=${s.avgConfidence.toFixed(2)}`;
+            });
+          ctx.ui.notify([
+            `Decision log stats (${decisionLogger.count} total entries):`,
+            "",
+            "Per provider:",
+            ...(providerLines.length > 0 ? providerLines : ["  none yet"]),
+            "",
+            "Per tier:",
+            ...(tierLines.length > 0 ? tierLines : ["  none yet"]),
+          ].join("\n"), "info");
+          return;
+        }
+
+        if (action === "show") {
+          const routeId = actionRest[0] || activeRouteId;
+          if (!routeId) {
+            ctx.ui.notify("Usage: /auto-router decisions show <routeId>", "error");
+            return;
+          }
+          const entries = decisionLogger.query((e) => e.routeId === routeId).slice(-10).reverse();
+          if (entries.length === 0) {
+            ctx.ui.notify(`No decisions logged for route "${routeId}".`, "info");
+            return;
+          }
+          const lines = entries.map((e, i) => {
+            const ts = new Date(e.timestamp).toLocaleString();
+            const icon = e.outcome === "success" ? "✅" : e.outcome === "terminal_error" ? "❌" : "⚠️";
+            return `  ${i + 1}. ${icon} ${ts} — ${e.targetLabel} → ${e.outcome}${e.outcome === "success" ? ` (${e.latencyMs}ms)` : ""}`;
+          });
+          ctx.ui.notify([
+            `Decisions for "${routeId}" (last ${entries.length}):`,
+            ...lines,
+          ].join("\n"), "info");
+          return;
+        }
+
+        if (action === "export") {
+          const all = decisionLogger.query();
+          if (all.length === 0) {
+            ctx.ui.notify("No decisions to export.", "info");
+            return;
+          }
+          // Summarize as a compact table
+          const byProvider = decisionLogger.getProviderStats();
+          const byTier = decisionLogger.getTierStats();
+          const lines = [
+            `Decision Log Export — ${all.length} entries`,
+            `File: ${decisionLogger.logFilePath}`,
+            "",
+            "Per Provider:",
+            ...Object.entries(byProvider)
+              .sort(([, a], [, b]) => b.attempts - a.attempts)
+              .map(([p, s]) => `  ${p}: ${s.successes}/${s.attempts} success (${s.attempts > 0 ? ((s.successes / s.attempts) * 100).toFixed(0) : 0}%), avg ${s.avgLatencyMs}ms`),
+            "",
+            "Per Tier:",
+            ...Object.entries(byTier)
+              .sort(([, a], [, b]) => b.count - a.count)
+              .map(([t, s]) => `  ${t}: ${s.count} calls, ${(s.successRate * 100).toFixed(0)}% success, avg conf ${s.avgConfidence.toFixed(2)}`),
+            "",
+            `Raw JSONL path: ${decisionLogger.logFilePath}`,
+            `Analyze with: cat "${decisionLogger.logFilePath}" | jq -s .`,
+          ];
+          ctx.ui.notify(lines.join("\n"), "info");
+          return;
+        }
+
+        if (action === "clear") {
+          decisionLogger.clear();
+          ctx.ui.notify("Decision log cleared.", "success");
+          return;
+        }
+
+        ctx.ui.notify([
+          "Usage: /auto-router decisions <subcommand>",
+          "",
+          "Subcommands:",
+          "  recent [count=10]   Show last N decisions",
+          "  show <routeId>      Show decisions for a specific route",
+          "  stats               Per-provider and per-tier summary",
+          "  export              Summary with jq analysis tip",
+          "  clear               Wipe the decision log",
+        ].join("\n"), "info");
+        return;
+      }
+
       if (subcommand === "reload") {
         rebuildProvider(pi);
         updateUi(ctx);
@@ -2026,6 +2219,7 @@ export default function (pi: ExtensionAPI) {
         "/auto-router uvi [show|enable|disable|refresh]",
         "/auto-router shadow [show|enable|disable]",
         "/auto-router rate <good|bad> [reason]",
+        "/auto-router decisions [recent|stats|show|export|clear]",
         "/auto-router test-resolve <provider/modelId>",
         "/auto-router debug",
         "/auto-router reload",
