@@ -25,7 +25,7 @@ import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-cl
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry } from "./src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -348,19 +348,7 @@ function getTargetBilling(target: RouteTarget): BillingModel {
   return "subscription";
 }
 
-
-function validateRouteTarget(target: unknown): target is RouteTarget {
-  if (!target || typeof target !== "object") return false;
-  const candidate = target as Record<string, unknown>;
-  return (
-    typeof candidate.provider === "string" && candidate.provider.trim().length > 0 &&
-    typeof candidate.modelId === "string" && candidate.modelId.trim().length > 0 &&
-    typeof candidate.label === "string" && candidate.label.trim().length > 0 &&
-    (candidate.authProvider === undefined || typeof candidate.authProvider === "string") &&
-    (candidate.billing === undefined || candidate.billing === "subscription" || candidate.billing === "per-token") &&
-    (candidate.balanceEndpoint === undefined || typeof candidate.balanceEndpoint === "string")
-  );
-}
+// validateRouteTarget is imported from ./src/display.ts
 
 function loadRoutesConfig(): void {
   routesCache = DEFAULT_ROUTES;

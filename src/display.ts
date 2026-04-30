@@ -240,3 +240,21 @@ export function findModelInRegistry(
 
   return undefined;
 }
+
+/**
+ * Type guard for RouteTarget objects loaded from config.
+ * Validates provider/modelId/label are non-empty strings,
+ * billing is subscription|per-token, and optional fields are correct types.
+ */
+export function validateRouteTarget(target: unknown): target is { provider: string; modelId: string; authProvider?: string; label: string; billing?: string; balanceEndpoint?: string } {
+  if (!target || typeof target !== "object") return false;
+  const candidate = target as Record<string, unknown>;
+  return (
+    typeof candidate.provider === "string" && candidate.provider.trim().length > 0 &&
+    typeof candidate.modelId === "string" && candidate.modelId.trim().length > 0 &&
+    typeof candidate.label === "string" && candidate.label.trim().length > 0 &&
+    (candidate.authProvider === undefined || typeof candidate.authProvider === "string") &&
+    (candidate.billing === undefined || candidate.billing === "subscription" || candidate.billing === "per-token") &&
+    (candidate.balanceEndpoint === undefined || typeof candidate.balanceEndpoint === "string")
+  );
+}
