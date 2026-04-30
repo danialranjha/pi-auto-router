@@ -242,6 +242,16 @@ export function findModelInRegistry(
 }
 
 /**
+ * Format a stable key for a route target, optionally scoped by routeId.
+ * Returns "unknown/unknown" for null/undefined targets.
+ */
+export function getTargetKey(target: { provider?: string; modelId?: string } | null | undefined, routeId?: string): string {
+  if (!target) return "unknown/unknown";
+  const targetKey = `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
+  return routeId ? `${routeId}:${targetKey}` : targetKey;
+}
+
+/**
  * Type guard for RouteTarget objects loaded from config.
  * Validates provider/modelId/label are non-empty strings,
  * billing is subscription|per-token, and optional fields are correct types.

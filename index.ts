@@ -25,7 +25,7 @@ import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-cl
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget } from "./src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -333,12 +333,7 @@ function getAccessToken(authProvider: string): string | undefined {
   return entry.access;
 }
 
-function getTargetKey(target: RouteTarget | undefined | null, routeId?: string): string {
-  if (!target) return "unknown/unknown";
-  const targetKey = `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
-  return routeId ? `${routeId}:${targetKey}` : targetKey;
-}
-
+// getTargetKey is imported from ./src/display.ts
 
 function getTargetBilling(target: RouteTarget): BillingModel {
   if (target.billing === "per-token") return "per-token";

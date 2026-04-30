@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget } from "../src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "../src/display.ts";
 import type { ModelDisplayInfo } from "../src/display.ts";
 import type { RouteTarget, RoutingHints } from "../src/types.ts";
 
@@ -575,5 +575,31 @@ describe("validateRouteTarget", () => {
 
   it("accepts target with billing per-token", () => {
     assert.equal(validateRouteTarget({ provider: "p", modelId: "m", label: "L", billing: "per-token" }), true);
+  });
+});
+
+describe("getTargetKey", () => {
+  it("formats unscoped key with provider/modelId", () => {
+    assert.equal(getTargetKey({ provider: "claude-agent-sdk", modelId: "claude-opus" }), "claude-agent-sdk/claude-opus");
+  });
+
+  it("formats route-scoped key", () => {
+    assert.equal(
+      getTargetKey({ provider: "openai-codex", modelId: "gpt-5-high" }, "subscription-reasoning"),
+      "subscription-reasoning:openai-codex/gpt-5-high",
+    );
+  });
+
+  it("returns unknown/unknown for null target", () => {
+    assert.equal(getTargetKey(null), "unknown/unknown");
+  });
+
+  it("returns unknown/unknown for undefined target", () => {
+    assert.equal(getTargetKey(undefined), "unknown/unknown");
+  });
+
+  it("uses 'unknown' for missing provider or modelId", () => {
+    assert.equal(getTargetKey({ provider: "", modelId: "m" }), "unknown/m");
+    assert.equal(getTargetKey({ provider: "p" }), "p/unknown");
   });
 });
