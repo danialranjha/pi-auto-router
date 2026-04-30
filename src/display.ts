@@ -59,10 +59,31 @@ export function parseResetAfterMs(message: any): number | undefined {
   return value * unitMs;
 }
 
+/** Parse a clock-time reset like "resets 8pm (America/Los_Angeles)" and return ms until that time. */
+export function parseClockResetMs(message: any): number | undefined {
+  const text = String(message ?? "");
+  // Match: "resets 8pm", "resets 8pm (America/Los_Angeles)", "resets 11:30am", etc.
+  const match = text.match(/resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|AM|PM)(?:\s*\(([^)]+)\))?/i);
+  if (!match) return undefined;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]) || 0;
+  const ampm = match[3].toLowerCase();
+  if (!Number.isFinite(hour) || hour < 1 || hour > 12 || minute < 0 || minute > 59) return undefined;
+  const hour24 = ampm === "pm" && hour !== 12 ? hour + 12 : ampm === "am" && hour === 12 ? 0 : hour;
+  const now = Date.now();
+  const target = new Date(now);
+  target.setHours(hour24, minute, 0, 0);
+  if (target.getTime() <= now) target.setDate(target.getDate() + 1);
+  const ms = target.getTime() - now;
+  return ms > 0 ? ms : undefined;
+}
+
 /** Determine cooldown duration in ms based on the error message content. */
 export function getCooldownMs(message: any): number {
   const explicitResetMs = parseResetAfterMs(message);
   if (explicitResetMs) return explicitResetMs + 5_000;
+  const clockResetMs = parseClockResetMs(message);
+  if (clockResetMs) return clockResetMs;
 
   const text = String(message ?? "").toLowerCase();
   if (text.includes("429") || text.includes("rate limit") || text.includes("too many requests")) return 2 * 60_000;

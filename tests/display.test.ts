@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, getCooldownMs, normalizeModelToken, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine } from "../src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine } from "../src/display.ts";
 import type { ModelDisplayInfo } from "../src/display.ts";
 import type { RouteTarget, RoutingHints } from "../src/types.ts";
 
@@ -183,8 +183,52 @@ describe("getCooldownMs", () => {
     assert.equal(ms, 30_000 + 5_000);
   });
 
+  it("uses clock reset for 'resets 8pm' messages", () => {
+    // This computes today's 8pm, hard to assert exact ms. Just verify > 0 and > 30min default
+    const ms = getCooldownMs("You've hit your limit · resets 8pm (America/Los_Angeles)");
+    assert.ok(ms > 30 * 60_000); // should be longer than the 30min fallback
+  });
+
   it("defaults to 90s for unknown errors", () => {
     assert.equal(getCooldownMs("something went wrong"), 90_000);
+  });
+});
+
+describe("parseClockResetMs", () => {
+  it("parses 'resets 8pm' pattern", () => {
+    const ms = parseClockResetMs("You've hit your limit · resets 8pm (America/Los_Angeles)");
+    assert.ok(typeof ms === "number" && ms > 0);
+    // Should be less than 24 hours (next 8pm today or tomorrow)
+    assert.ok(ms < 24 * 60 * 60_000);
+  });
+
+  it("parses 'resets 11:30am' with minutes", () => {
+    const ms = parseClockResetMs("rate limited, resets 11:30am");
+    assert.ok(typeof ms === "number" && ms > 0);
+    assert.ok(ms < 24 * 60 * 60_000);
+  });
+
+  it("parses 'resets 12am' (midnight)", () => {
+    const ms = parseClockResetMs("quota exhausted, resets 12am");
+    assert.ok(typeof ms === "number" && ms > 0);
+    assert.ok(ms < 24 * 60 * 60_000);
+  });
+
+  it("parses 'resets 12pm' (noon)", () => {
+    const ms = parseClockResetMs("resets 12pm UTC");
+    assert.ok(typeof ms === "number" && ms > 0);
+    assert.ok(ms < 24 * 60 * 60_000);
+  });
+
+  it("returns undefined for non-clock messages", () => {
+    assert.equal(parseClockResetMs("rate limit exceeded"), undefined);
+    assert.equal(parseClockResetMs("429 Too Many Requests"), undefined);
+    assert.equal(parseClockResetMs(""), undefined);
+  });
+
+  it("returns undefined for invalid hour values", () => {
+    assert.equal(parseClockResetMs("resets 13pm"), undefined);
+    assert.equal(parseClockResetMs("resets 0pm"), undefined);
   });
 });
 
