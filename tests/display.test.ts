@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine } from "../src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine, getPrimaryModelLimits } from "../src/display.ts";
 import type { ModelDisplayInfo } from "../src/display.ts";
 import type { RouteTarget, RoutingHints } from "../src/types.ts";
 
@@ -413,5 +413,62 @@ describe("formatModelLine", () => {
     const model: ModelDisplayInfo = { ...baseModel, contextWindow: 1000000 };
     const result = formatModelLine(model, null);
     assert.ok(result.includes("ctx: 1,000,000"));
+  });
+});
+
+describe("getPrimaryModelLimits", () => {
+  const noModel = (_p: string, _m: string) => undefined;
+  const model200k = (p: string, m: string) => p === "test" ? { contextWindow: 200000, maxTokens: 64000 } : undefined;
+
+  it("uses route explicit limits when both set", () => {
+    const result = getPrimaryModelLimits(
+      { contextWindow: 128000, maxTokens: 32000 },
+      noModel,
+    );
+    assert.equal(result.contextWindow, 128000);
+    assert.equal(result.maxTokens, 32000);
+  });
+
+  it("falls back to first target model lookup", () => {
+    const result = getPrimaryModelLimits(
+      { targets: [{ provider: "test", modelId: "m1" }] },
+      model200k,
+    );
+    assert.equal(result.contextWindow, 200000);
+    assert.equal(result.maxTokens, 64000);
+  });
+
+  it("remaps claude-agent-sdk to anthropic for model lookup", () => {
+    const antModel = (p: string, _m: string) => p === "anthropic" ? { contextWindow: 500000, maxTokens: 128000 } : undefined;
+    const result = getPrimaryModelLimits(
+      { targets: [{ provider: "claude-agent-sdk", modelId: "claude-opus" }] },
+      antModel,
+    );
+    assert.equal(result.contextWindow, 500000);
+  });
+
+  it("returns defaults when no targets present", () => {
+    const result = getPrimaryModelLimits({ targets: [] }, noModel);
+    assert.equal(result.contextWindow, 200000);
+    assert.equal(result.maxTokens, 128000);
+  });
+
+  it("returns defaults when model lookup returns undefined", () => {
+    const result = getPrimaryModelLimits(
+      { targets: [{ provider: "unknown", modelId: "none" }] },
+      noModel,
+    );
+    assert.equal(result.contextWindow, 200000);
+    assert.equal(result.maxTokens, 128000);
+  });
+
+  it("returns defaults when model lookup throws", () => {
+    const throwing = (_p: string, _m: string) => { throw new Error("boom"); };
+    const result = getPrimaryModelLimits(
+      { targets: [{ provider: "test", modelId: "m" }] },
+      throwing,
+    );
+    assert.equal(result.contextWindow, 200000);
+    assert.equal(result.maxTokens, 128000);
   });
 });

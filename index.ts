@@ -25,7 +25,7 @@ import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-cl
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey } from "./src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -535,17 +535,14 @@ function getInnerModel(target: RouteTarget, context?: Context): Model<Api> {
   return model;
 }
 
-function getPrimaryModelLimits(route: RouteDefinition): { contextWindow: number; maxTokens: number } {
-  if (route.contextWindow && route.maxTokens) return { contextWindow: route.contextWindow, maxTokens: route.maxTokens };
-  const first = route.targets[0];
-  if (!first) return { contextWindow: 200000, maxTokens: 128000 };
-  try {
-    const model = first.provider === "claude-agent-sdk"
-      ? getModel("anthropic", first.modelId)
-      : getModel(first.provider, first.modelId);
-    if (model) return { contextWindow: model.contextWindow, maxTokens: model.maxTokens };
-  } catch {}
-  return { contextWindow: 200000, maxTokens: 128000 };
+function getPrimaryModelLimitsFn(route: RouteDefinition): { contextWindow: number; maxTokens: number } {
+  return getPrimaryModelLimits(route, (provider, modelId) => {
+    try {
+      const model = getModel(provider, modelId);
+      if (model) return { contextWindow: model.contextWindow, maxTokens: model.maxTokens };
+    } catch { /* SDK may throw */ }
+    return undefined;
+  });
 }
 
 function isRetryableError(message: any): boolean {
@@ -1370,7 +1367,7 @@ function routeSummary(routeId: string): string {
   });
   return [
     `${routeId} — ${prettyRouteName(routeId)}`,
-    (() => { const l = getPrimaryModelLimits(route); return `thinking=${route.reasoning !== false} | vision=${(route.input ?? ["text", "image"]).includes("image")} | ctx=${l.contextWindow.toLocaleString()} | max=${l.maxTokens.toLocaleString()}${route.contextWindow ? " (forced)" : ""}`; })(),
+    (() => { const l = getPrimaryModelLimitsFn(route); return `thinking=${route.reasoning !== false} | vision=${(route.input ?? ["text", "image"]).includes("image")} | ctx=${l.contextWindow.toLocaleString()} | max=${l.maxTokens.toLocaleString()}${route.contextWindow ? " (forced)" : ""}`; })(),
     ...lines
   ].join("\n");
 }
@@ -1424,7 +1421,7 @@ function rebuildProvider(pi: ExtensionAPI) {
     apiKey: "auto-router-literal",
     api: "auto-router-api",
     models: Object.entries(routesCache).map(([routeId, route]) => {
-      const limits = getPrimaryModelLimits(route);
+      const limits = getPrimaryModelLimitsFn(route);
       return {
         id: routeId,
         name: route.name ?? routeId,

@@ -149,3 +149,31 @@ export function formatModelLine(
   const costText = `$${model.cost.input.toFixed(2)}/$${model.cost.output.toFixed(2)} per 1M tokens (in/out)`;
   return `${model.provider}/${model.id}${marker}${capabilityText}\n  ${model.name} | ctx: ${model.contextWindow.toLocaleString()} | max: ${model.maxTokens.toLocaleString()}\n  ${costText}`;
 }
+
+/** Result of resolving primary model limits for a route. */
+export type PrimaryModelLimits = { contextWindow: number; maxTokens: number };
+
+const DEFAULT_PRIMARY_MODEL_LIMITS: PrimaryModelLimits = { contextWindow: 200_000, maxTokens: 128_000 };
+
+/**
+ * Resolve the primary model limits for a route.
+ *
+ * Priority order:
+ * 1. Route's explicit contextWindow/maxTokens
+ * 2. First target's model (resolved via callback)
+ * 3. Hardcoded defaults (200k/128k)
+ */
+export function getPrimaryModelLimits(
+  route: { contextWindow?: number; maxTokens?: number; targets?: Array<{ provider: string; modelId: string }> },
+  resolveModel: (provider: string, modelId: string) => PrimaryModelLimits | undefined,
+): PrimaryModelLimits {
+  if (route.contextWindow && route.maxTokens) return { contextWindow: route.contextWindow, maxTokens: route.maxTokens };
+  const first = route.targets?.[0];
+  if (!first) return DEFAULT_PRIMARY_MODEL_LIMITS;
+  try {
+    const provider = first.provider === "claude-agent-sdk" ? "anthropic" : first.provider;
+    const model = resolveModel(provider, first.modelId);
+    if (model) return { contextWindow: model.contextWindow, maxTokens: model.maxTokens };
+  } catch { /* fall through */ }
+  return DEFAULT_PRIMARY_MODEL_LIMITS;
+}
