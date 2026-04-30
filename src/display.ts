@@ -80,3 +80,19 @@ export function normalizeModelToken(value: string): string {
     .replace(/[^a-z0-9]+/g, "")
     .trim();
 }
+
+/** Env var candidate names for a given provider (e.g. "ollama" → OLLAMA_API_KEY, OLLAMA_KEY). */
+export function providerApiKeyEnvVars(provider: string): string[] {
+  const upper = provider.toUpperCase();
+  const dashed = provider.replace(/-/g, "_").toUpperCase();
+  return [`${upper}_API_KEY`, `${upper}_KEY`, `${dashed}_API_KEY`];
+}
+
+/** Resolve an API key from environment variables for a provider. Returns undefined if none set. */
+export function resolveProviderApiKeyFromEnv(provider: string): string | undefined {
+  for (const name of providerApiKeyEnvVars(provider)) {
+    const val = process.env[name];
+    if (val) return val;
+  }
+  return undefined;
+}

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, getCooldownMs, normalizeModelToken } from "../src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, getCooldownMs, normalizeModelToken, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv } from "../src/display.ts";
 import type { RouteTarget, RoutingHints } from "../src/types.ts";
 
 describe("parseModelSpec", () => {
@@ -199,5 +199,46 @@ describe("normalizeModelToken", () => {
 
   it("handles already clean input", () => {
     assert.equal(normalizeModelToken("gpt4"), "gpt4");
+  });
+});
+
+describe("providerApiKeyEnvVars", () => {
+  it("generates upper-case API key env var for simple provider", () => {
+    const vars = providerApiKeyEnvVars("ollama");
+    assert.ok(vars.includes("OLLAMA_API_KEY"));
+    assert.ok(vars.includes("OLLAMA_KEY"));
+  });
+
+  it("generates underscore variant for dashed provider names", () => {
+    const vars = providerApiKeyEnvVars("openai-codex");
+    assert.ok(vars.includes("OPENAI_CODEX_API_KEY"));
+  });
+});
+
+describe("resolveProviderApiKeyFromEnv", () => {
+  it("returns undefined for providers with no env var set", () => {
+    assert.equal(resolveProviderApiKeyFromEnv("nonexistent_provider_xyz"), undefined);
+  });
+
+  it("returns key from OLLAMA_API_KEY env var", () => {
+    const original = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "test-ollama-key-123";
+    try {
+      assert.equal(resolveProviderApiKeyFromEnv("ollama"), "test-ollama-key-123");
+    } finally {
+      if (original !== undefined) process.env.OLLAMA_API_KEY = original;
+      else delete process.env.OLLAMA_API_KEY;
+    }
+  });
+
+  it("returns key from DEEPSEEK_API_KEY env var", () => {
+    const original = process.env.DEEPSEEK_API_KEY;
+    process.env.DEEPSEEK_API_KEY = "sk-test-deepseek";
+    try {
+      assert.equal(resolveProviderApiKeyFromEnv("deepseek"), "sk-test-deepseek");
+    } finally {
+      if (original !== undefined) process.env.DEEPSEEK_API_KEY = original;
+      else delete process.env.DEEPSEEK_API_KEY;
+    }
   });
 });
