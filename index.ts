@@ -25,7 +25,7 @@ import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-cl
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken } from "./src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -338,19 +338,6 @@ function getTargetKey(target: RouteTarget | undefined | null): string {
   return `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
 }
 
-/** Resolve an API key from environment variables for a given provider. */
-function resolveProviderApiKeyFromEnv(provider: string): string | undefined {
-  const candidates = [
-    `${provider.toUpperCase()}_API_KEY`,
-    `${provider.toUpperCase()}_KEY`,
-    `${provider.replace(/-/g, "_").toUpperCase()}_API_KEY`,
-  ];
-  for (const name of candidates) {
-    const val = process.env[name];
-    if (val) return val;
-  }
-  return undefined;
-}
 
 function getTargetBilling(target: RouteTarget): BillingModel {
   if (target.billing === "per-token") return "per-token";
@@ -574,6 +561,7 @@ function isRetryableError(message: any): boolean {
     "quota", "quota will reset", "quota exceeded",
     "hit your limit", "credits exhausted", "insufficient balance",
     "bad gateway", "service unavailable", "gateway timeout", "upstream",
+    "no api key", "401",
     "invalid 'input", "call_id", "function_response.name", "required_field_missing",
     "400 status code", "invalid_request_error", "invalid google cloud code assist credentials"
   ].some((needle) => text.includes(needle));
