@@ -162,10 +162,16 @@ describe("getCooldownMs", () => {
     assert.equal(getCooldownMs("API request throttled, try again later"), 2 * 60_000);
   });
 
-  it("detects quota / capacity / overload", () => {
+  it("detects quota / capacity / overload / 5xx", () => {
     assert.equal(getCooldownMs("quota exceeded"), 5 * 60_000);
     assert.equal(getCooldownMs("service overloaded"), 5 * 60_000);
     assert.equal(getCooldownMs("503 Service Unavailable"), 5 * 60_000);
+  });
+
+  it("detects server errors (500/502/504) as 5m cooldown", () => {
+    assert.equal(getCooldownMs("502 Bad Gateway"), 5 * 60_000);
+    assert.equal(getCooldownMs("504 Gateway Timeout"), 5 * 60_000);
+    assert.equal(getCooldownMs("500 Internal Server Error"), 5 * 60_000);
   });
 
   it("detects not found / model unavailable", () => {
