@@ -3,7 +3,7 @@ import { ensureFreshAuthForProviders, type OAuthProviderId } from "./quota-fetch
 /**
  * Maps a route-config provider name to the OAuth provider id used for auth checks.
  */
-const ROUTE_TO_OAUTH: Record<string, OAuthProviderId> = {
+export const ROUTE_TO_OAUTH: Record<string, OAuthProviderId> = {
   "openai-codex": "openai-codex",
   "google-antigravity": "google-antigravity",
   "google-gemini-cli": "google-gemini-cli",
@@ -11,8 +11,8 @@ const ROUTE_TO_OAUTH: Record<string, OAuthProviderId> = {
   "claude-agent-sdk": "anthropic",
 };
 
-const HEALTH_CHECK_TTL_MS = 60_000; // cache healthy status for 60s
-const UNHEALTHY_TTL_MS = 10_000; // retry unhealthy providers sooner
+export const HEALTH_CHECK_TTL_MS = 60_000; // cache healthy status for 60s
+export const UNHEALTHY_TTL_MS = 10_000; // retry unhealthy providers sooner
 
 interface HealthEntry {
   healthy: boolean;
@@ -116,7 +116,7 @@ export class ProviderHealthCache {
   }
 }
 
-function resolveOAuth(provider: string, authProvider?: string): OAuthProviderId | null {
+export function resolveOAuth(provider: string, authProvider?: string): OAuthProviderId | null {
   if (authProvider && ROUTE_TO_OAUTH[authProvider]) return ROUTE_TO_OAUTH[authProvider];
   if (provider && ROUTE_TO_OAUTH[provider]) return ROUTE_TO_OAUTH[provider];
   return null;
