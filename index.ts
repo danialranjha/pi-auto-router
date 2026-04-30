@@ -25,7 +25,7 @@ import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-cl
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine } from "./src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -1404,7 +1404,7 @@ function searchRoutes(query: string): string {
 }
 
 function resolveAlias(name: string, ctx: any): { success?: string; error?: string } {
-  const aliasKey = Object.keys(aliasesCache).find((key) => String(key ?? "").toLowerCase() === String(name ?? "").toLowerCase());
+  const aliasKey = findCaseInsensitiveKey(aliasesCache as Record<string, unknown>, name);
   if (!aliasKey) return { error: `Unknown alias: ${name}` };
   const candidates = Array.isArray(aliasesCache[aliasKey]) ? aliasesCache[aliasKey] as string[] : [aliasesCache[aliasKey] as string];
   const available = ctx.modelRegistry.getAvailable();
