@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine, getPrimaryModelLimits, findModelInRegistry } from "../src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget } from "../src/display.ts";
 import type { ModelDisplayInfo } from "../src/display.ts";
 import type { RouteTarget, RoutingHints } from "../src/types.ts";
 
@@ -531,5 +531,49 @@ describe("findModelInRegistry", () => {
   it("returns undefined for empty modelId", () => {
     const found = findModelInRegistry(models, "anthropic", "");
     assert.equal(found, undefined);
+  });
+});
+
+describe("validateRouteTarget", () => {
+  it("rejects null and non-objects", () => {
+    assert.equal(validateRouteTarget(null), false);
+    assert.equal(validateRouteTarget(undefined), false);
+    assert.equal(validateRouteTarget("string"), false);
+  });
+
+  it("rejects objects with empty provider/modelId/label", () => {
+    assert.equal(validateRouteTarget({ provider: "", modelId: "m", label: "L" }), false);
+    assert.equal(validateRouteTarget({ provider: "p", modelId: "", label: "L" }), false);
+    assert.equal(validateRouteTarget({ provider: "p", modelId: "m", label: "" }), false);
+  });
+
+  it("rejects whitespace-only strings", () => {
+    assert.equal(validateRouteTarget({ provider: "  ", modelId: "m", label: "L" }), false);
+  });
+
+  it("rejects invalid billing values", () => {
+    const base = { provider: "p", modelId: "m", label: "L" };
+    assert.equal(validateRouteTarget({ ...base, billing: "hourly" }), false);
+    assert.equal(validateRouteTarget({ ...base, billing: 123 }), false);
+  });
+
+  it("rejects non-string authProvider", () => {
+    assert.equal(validateRouteTarget({ provider: "p", modelId: "m", label: "L", authProvider: 123 }), false);
+  });
+
+  it("rejects non-string balanceEndpoint", () => {
+    assert.equal(validateRouteTarget({ provider: "p", modelId: "m", label: "L", balanceEndpoint: true }), false);
+  });
+
+  it("accepts minimal valid target", () => {
+    assert.equal(validateRouteTarget({ provider: "p", modelId: "m", label: "L" }), true);
+  });
+
+  it("accepts target with billing subscription", () => {
+    assert.equal(validateRouteTarget({ provider: "p", modelId: "m", label: "L", billing: "subscription" }), true);
+  });
+
+  it("accepts target with billing per-token", () => {
+    assert.equal(validateRouteTarget({ provider: "p", modelId: "m", label: "L", billing: "per-token" }), true);
   });
 });
