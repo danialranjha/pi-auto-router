@@ -25,7 +25,7 @@ import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-cl
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits } from "./src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -458,15 +458,11 @@ function rebuildPolicyEngine(): void {
 
 function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model<Api> | undefined {
   const registry = (context as any)?.modelRegistry || latestUiContext?.modelRegistry;
-  const available = typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
-  
+  const available: Array<{ provider: string; id: string; name?: string }> =
+    typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+
   // Try to find the provider even if available is empty (for built-in models)
   const provider = target.provider === "claude-agent-sdk" ? "anthropic" : target.provider;
-  const requestedId = String(target.modelId ?? "").toLowerCase();
-  const requestedParts = requestedId.split("/").filter(Boolean);
-  const requestedTail = requestedParts.at(-1) ?? requestedId;
-  const requestedNormalized = normalizeModelToken(requestedId);
-  const requestedTailNormalized = normalizeModelToken(requestedTail);
 
   const wrapClaude = (base: any): Model<Api> => ({
     ...base,
@@ -480,46 +476,27 @@ function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model
     return base as Model<Api>;
   };
 
+  // Direct lookup via pi SDK
   const direct = (() => {
     try {
-      // Use the actual provider name for getModel
       return getModel(provider, target.modelId);
     } catch {
       try {
-          // Fallback to searching without provider prefix if modelId already has it
-          if (target.modelId.includes("/")) {
-              const [p, m] = target.modelId.split("/");
-              return getModel(p, m);
-          }
+        if (target.modelId.includes("/")) {
+          const [p, m] = target.modelId.split("/");
+          return getModel(p, m);
+        }
       } catch {}
       return undefined;
     }
   })();
   if (direct) return wrapTarget(direct);
 
-  if (!Array.isArray(available) || available.length === 0) return undefined;
-
-  const findInList = (list: any[]) => {
-    return list.find((model: any) => {
-      const id = String(model?.id ?? "").toLowerCase();
-      const idNormalized = normalizeModelToken(id);
-      return id === requestedId || id === requestedTail || id.endsWith(`/${requestedId}`) || id.endsWith(`/${requestedTail}`) || idNormalized === requestedNormalized || idNormalized === requestedTailNormalized;
-    }) ?? list.find((model: any) => {
-      const id = String(model?.id ?? "").toLowerCase();
-      const name = String(model?.name ?? "").toLowerCase();
-      const idNormalized = normalizeModelToken(id);
-      const nameNormalized = normalizeModelToken(name);
-      return id.includes(requestedTail) || name.includes(requestedTail) || idNormalized.includes(requestedTailNormalized) || requestedNormalized.includes(idNormalized) || nameNormalized.includes(requestedTailNormalized);
-    });
-  };
-
-  const providerMatches = available.filter((model: any) => String(model?.provider ?? "").toLowerCase() === provider.toLowerCase());
-  const pick = findInList(providerMatches);
-  if (pick) return wrapTarget(pick);
-
-  // Fallback: search across all providers if not found in requested provider
-  const globalPick = findInList(available);
-  if (globalPick) return wrapTarget(globalPick);
+  // Registry search via extracted matching logic
+  if (available.length > 0) {
+    const match = findModelInRegistry(available, provider, target.modelId);
+    if (match) return wrapTarget(match);
+  }
 
   return undefined;
 }

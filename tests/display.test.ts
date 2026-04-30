@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine, getPrimaryModelLimits } from "../src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine, getPrimaryModelLimits, findModelInRegistry } from "../src/display.ts";
 import type { ModelDisplayInfo } from "../src/display.ts";
 import type { RouteTarget, RoutingHints } from "../src/types.ts";
 
@@ -470,5 +470,66 @@ describe("getPrimaryModelLimits", () => {
     );
     assert.equal(result.contextWindow, 200000);
     assert.equal(result.maxTokens, 128000);
+  });
+});
+
+describe("findModelInRegistry", () => {
+  const models: Array<{ provider: string; id: string; name?: string }> = [
+    { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+    { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    { provider: "openai-codex", id: "gpt-5-high", name: "GPT-5 High" },
+    { provider: "openai-codex", id: "gpt-5-high:instruct", name: "GPT-5 High (Instruct)" },
+    { provider: "google-gemini-cli", id: "gemini-3.2-pro", name: "Gemini 3.2 Pro" },
+  ];
+
+  it("finds exact match by provider + id", () => {
+    const found = findModelInRegistry(models, "anthropic", "claude-opus-4-7");
+    assert.ok(found);
+    assert.equal(found!.id, "claude-opus-4-7");
+  });
+
+  it("finds by tail match after slash", () => {
+    const found = findModelInRegistry(models, "anthropic", "anthropic/claude-opus-4-7");
+    assert.ok(found);
+    assert.equal(found!.id, "claude-opus-4-7");
+  });
+
+  it("finds by normalized token (strips :instruct suffix)", () => {
+    const found = findModelInRegistry(models, "openai-codex", "gpt5high");
+    assert.ok(found);
+    assert.equal(found!.id, "gpt-5-high");
+  });
+
+  it("finds with partial name match as fallback", () => {
+    const found = findModelInRegistry(models, "openai-codex", "gpt5");
+    assert.ok(found);
+    assert.equal(found!.id, "gpt-5-high");
+  });
+
+  it("finds with case-insensitive matching", () => {
+    const found = findModelInRegistry(models, "ANTHROPIC", "Claude-Sonnet-4-6");
+    assert.ok(found);
+    assert.equal(found!.id, "claude-sonnet-4-6");
+  });
+
+  it("falls back to global search when provider doesn't match", () => {
+    const found = findModelInRegistry(models, "deepseek", "gpt-5-high");
+    assert.ok(found);
+    assert.equal(found!.provider, "openai-codex");
+  });
+
+  it("returns undefined for non-existent model", () => {
+    const found = findModelInRegistry(models, "anthropic", "nonexistent-model");
+    assert.equal(found, undefined);
+  });
+
+  it("returns undefined for empty available list", () => {
+    const found = findModelInRegistry([], "anthropic", "claude-opus-4-7");
+    assert.equal(found, undefined);
+  });
+
+  it("returns undefined for empty modelId", () => {
+    const found = findModelInRegistry(models, "anthropic", "");
+    assert.equal(found, undefined);
   });
 });

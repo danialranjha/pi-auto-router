@@ -177,3 +177,66 @@ export function getPrimaryModelLimits(
   } catch { /* fall through */ }
   return DEFAULT_PRIMARY_MODEL_LIMITS;
 }
+
+/** A lightweight model descriptor for registry matching (provider + id). */
+export type RegistryModel = { provider: string; id: string; name?: string };
+
+/**
+ * Find a model in the available registry that matches the requested provider/modelId.
+ *
+ * Search order:
+ * 1. Exact match (id equality, tail match, ends-with)
+ * 2. Normalized match (lowercase, stripped tags)
+ * 3. Partial match (substring in id or name)
+ * 4. Fallback to global search across all providers
+ */
+export function findModelInRegistry(
+  available: RegistryModel[],
+  provider: string,
+  modelId: string,
+): RegistryModel | undefined {
+  const requestedId = String(modelId ?? "").toLowerCase();
+  if (!requestedId) return undefined;
+  const requestedParts = requestedId.split("/").filter(Boolean);
+  const requestedTail = requestedParts.at(-1) ?? requestedId;
+  const requestedNormalized = normalizeModelToken(requestedId);
+  const requestedTailNormalized = normalizeModelToken(requestedTail);
+
+  const matchExact = (model: RegistryModel): boolean => {
+    const id = String(model.id ?? "").toLowerCase();
+    return id === requestedId || id === requestedTail || id.endsWith(`/${requestedId}`) || id.endsWith(`/${requestedTail}`);
+  };
+
+  const matchNormalized = (model: RegistryModel): boolean => {
+    const idNorm = normalizeModelToken(model.id);
+    return idNorm === requestedNormalized || idNorm === requestedTailNormalized;
+  };
+
+  const matchPartial = (model: RegistryModel): boolean => {
+    const id = String(model.id ?? "").toLowerCase();
+    const name = String(model.name ?? "").toLowerCase();
+    const idNorm = normalizeModelToken(model.id);
+    const nameNorm = normalizeModelToken(name);
+    return id.includes(requestedTail) || name.includes(requestedTail) ||
+      idNorm.includes(requestedTailNormalized) || requestedNormalized.includes(idNorm) ||
+      nameNorm.includes(requestedTailNormalized);
+  };
+
+  const findInList = (list: RegistryModel[]): RegistryModel | undefined => {
+    return list.find(matchExact) ?? list.find(matchNormalized) ?? list.find(matchPartial);
+  };
+
+  // Provider-specific search
+  if (Array.isArray(available) && available.length > 0) {
+    const providerMatches = available.filter((m) =>
+      String(m.provider ?? "").toLowerCase() === provider.toLowerCase(),
+    );
+    const pick = findInList(providerMatches);
+    if (pick) return pick;
+
+    // Fallback: global search across all providers
+    return findInList(available);
+  }
+
+  return undefined;
+}
