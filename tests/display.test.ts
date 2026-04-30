@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, getCooldownMs, normalizeModelToken, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv } from "../src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, getCooldownMs, normalizeModelToken, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine } from "../src/display.ts";
+import type { ModelDisplayInfo } from "../src/display.ts";
 import type { RouteTarget, RoutingHints } from "../src/types.ts";
 
 describe("parseModelSpec", () => {
@@ -246,5 +247,84 @@ describe("resolveProviderApiKeyFromEnv", () => {
       if (original !== undefined) process.env.DEEPSEEK_API_KEY = original;
       else delete process.env.DEEPSEEK_API_KEY;
     }
+  });
+});
+
+const baseModel: ModelDisplayInfo = {
+  provider: "testco",
+  id: "test-1",
+  name: "Test Model 1",
+  reasoning: true,
+  input: ["text", "image"],
+  contextWindow: 200000,
+  maxTokens: 128000,
+  cost: { input: 3.0, output: 15.0 },
+};
+
+describe("formatModelLine", () => {
+  it("formats a model with reasoning + vision capabilities", () => {
+    const result = formatModelLine(baseModel, null);
+    assert.ok(result.includes("testco/test-1"));
+    assert.ok(result.includes("[reasoning, vision]"));
+    assert.ok(result.includes("Test Model 1"));
+    assert.ok(result.includes("ctx: 200,000"));
+    assert.ok(result.includes("max: 128,000"));
+    assert.ok(result.includes("$3.00/$15.00"));
+    assert.ok(!result.includes("(current)"));
+  });
+
+  it("marks current model when provider and id match", () => {
+    const result = formatModelLine(baseModel, { provider: "testco", id: "test-1" });
+    assert.ok(result.includes("(current)"));
+    assert.ok(result.startsWith("testco/test-1 (current)"));
+  });
+
+  it("does not mark current when provider differs", () => {
+    const result = formatModelLine(baseModel, { provider: "other", id: "test-1" });
+    assert.ok(!result.includes("(current)"));
+  });
+
+  it("does not mark current when id differs", () => {
+    const result = formatModelLine(baseModel, { provider: "testco", id: "other" });
+    assert.ok(!result.includes("(current)"));
+  });
+
+  it("omits capability label for text-only model without reasoning", () => {
+    const model: ModelDisplayInfo = { ...baseModel, reasoning: false, input: ["text"] };
+    const result = formatModelLine(model, null);
+    assert.ok(!result.includes("["));
+    assert.ok(!result.includes("]"));
+  });
+
+  it("shows only reasoning for text-only reasoning model", () => {
+    const model: ModelDisplayInfo = { ...baseModel, reasoning: true, input: ["text"] };
+    const result = formatModelLine(model, null);
+    assert.ok(result.includes("[reasoning]"));
+    assert.ok(!result.includes("vision"));
+  });
+
+  it("shows only vision for non-reasoning image model", () => {
+    const model: ModelDisplayInfo = { ...baseModel, reasoning: false, input: ["text", "image"] };
+    const result = formatModelLine(model, null);
+    assert.ok(result.includes("[vision]"));
+    assert.ok(!result.includes("reasoning"));
+  });
+
+  it("handles undefined currentModel", () => {
+    const result = formatModelLine(baseModel, undefined);
+    assert.ok(!result.includes("(current)"));
+    assert.ok(result.includes("testco/test-1"));
+  });
+
+  it("formats costs with toFixed(2)", () => {
+    const model: ModelDisplayInfo = { ...baseModel, cost: { input: 0.5, output: 2 } };
+    const result = formatModelLine(model, null);
+    assert.ok(result.includes("$0.50/$2.00"));
+  });
+
+  it("formats large context windows", () => {
+    const model: ModelDisplayInfo = { ...baseModel, contextWindow: 1000000 };
+    const result = formatModelLine(model, null);
+    assert.ok(result.includes("ctx: 1,000,000"));
   });
 });
