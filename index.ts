@@ -333,9 +333,10 @@ function getAccessToken(authProvider: string): string | undefined {
   return entry.access;
 }
 
-function getTargetKey(target: RouteTarget | undefined | null): string {
+function getTargetKey(target: RouteTarget | undefined | null, routeId?: string): string {
   if (!target) return "unknown/unknown";
-  return `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
+  const targetKey = `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
+  return routeId ? `${routeId}:${targetKey}` : targetKey;
 }
 
 
@@ -567,8 +568,8 @@ function isRetryableError(message: any): boolean {
   ].some((needle) => text.includes(needle));
 }
 
-function putOnCooldown(target: RouteTarget, reason: string) {
-  cooldowns.set(getTargetKey(target), { until: Date.now() + getCooldownMs(reason), reason });
+function putOnCooldown(target: RouteTarget, reason: string, routeId?: string) {
+  cooldowns.set(getTargetKey(target, routeId), { until: Date.now() + getCooldownMs(reason), reason });
 }
 
 function getHealthyTargets(routeId: string): RouteTarget[] {
@@ -577,7 +578,7 @@ function getHealthyTargets(routeId: string): RouteTarget[] {
     if (!target) return false;
     const token = target.authProvider ? getAccessToken(target.authProvider) : "builtin";
     if (!token) return false;
-    const cooldown = cooldowns.get(getTargetKey(target));
+    const cooldown = cooldowns.get(getTargetKey(target, routeId));
     return !cooldown || cooldown.until <= now;
   });
 }
@@ -587,7 +588,7 @@ function formatCooldowns(routeId?: string): string {
   const targets = routeId ? routesCache[routeId]?.targets ?? [] : Object.values(routesCache).flatMap((route) => route.targets);
   const lines = targets
     .map((target) => {
-      const state = cooldowns.get(getTargetKey(target));
+      const state = cooldowns.get(getTargetKey(target, routeId));
       if (!state || state.until <= now) return null;
       return `${target.label}: cooldown ${formatRemainingMs(state.until - now)}`;
     })
@@ -673,7 +674,7 @@ async function tryTarget(
   
   if (target.authProvider && !token) {
     const message = `${target.label}: no valid subscription token`;
-    putOnCooldown(target, message);
+    putOnCooldown(target, message, outerModel.id);
     return { success: false, retryableFailure: message };
   }
 
@@ -682,7 +683,7 @@ async function tryTarget(
     innerModel = getInnerModel(target, context);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    putOnCooldown(target, message);
+    putOnCooldown(target, message, outerModel.id);
     return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
   }
   const buffered: any[] = [];
@@ -724,7 +725,7 @@ async function tryTarget(
       if (event.type === "error") {
         const message = event.error?.errorMessage || `${target.label || "Target"}: unknown error`;
         if (!sawSubstantive && isRetryableError(message)) {
-          putOnCooldown(target, message);
+          putOnCooldown(target, message, outerModel.id);
           return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
         }
         flush();
@@ -758,7 +759,7 @@ async function tryTarget(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!sawSubstantive && isRetryableError(message)) {
-      putOnCooldown(target, message);
+      putOnCooldown(target, message, outerModel.id);
       return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
     }
     throw error;
@@ -769,7 +770,7 @@ async function tryTarget(
   if (lastMessage?.stopReason === "error" || lastMessage?.errorMessage) {
     const message = lastMessage.errorMessage || "Unknown terminal error";
     if (!sawSubstantive && isRetryableError(message)) {
-      putOnCooldown(target, message);
+      putOnCooldown(target, message, outerModel.id);
       return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
     }
     return {
@@ -961,7 +962,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         requirements,
         capabilities: (t) => lookupCapabilities(t, context),
         isOnCooldown: (t) => {
-          const c = cooldowns.get(getTargetKey(t));
+          const c = cooldowns.get(getTargetKey(t, routeId));
           if (c && c.until > Date.now()) return true;
           // Circuit breaker: skip providers with an open circuit
           if (circuitBreaker.isOpen(t.provider)) return true;
@@ -1054,7 +1055,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       const legacyTargets = shadowMode
         ? healthy.filter((t) => {
             if (!getProviderHealthCache().isHealthy(t.provider, t.authProvider)) return false;
-            const c = cooldowns.get(getTargetKey(t));
+            const c = cooldowns.get(getTargetKey(t, routeId));
             return !c || c.until <= Date.now();
           })
         : null;
@@ -1149,7 +1150,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         ? Math.max(0, selectedLimit - selectedSpend)
         : 0;
       const decision: RoutingDecision = {
-        tier: match?.tier ?? "swe",
+        tier: match?.tier ?? effectiveTierFinal ?? "swe",
         phase: match ? "shortcut" : "default",
         target: targets[0],
         reasoning: reasoningParts.join(" | "),
@@ -1358,10 +1359,10 @@ function refreshStatus(routeId?: string) {
 function routeSummary(routeId: string): string {
   const route = routesCache[routeId];
   if (!route) return `Unknown route: ${routeId}`;
-  const healthySet = new Set(getHealthyTargets(routeId).map(getTargetKey));
+  const healthySet = new Set(getHealthyTargets(routeId).map((t: RouteTarget) => getTargetKey(t, routeId)));
   const lines = (route.targets || []).map((target, index) => {
     if (!target) return `${index + 1}. [Invalid Target]`;
-    const key = getTargetKey(target);
+    const key = getTargetKey(target, routeId);
     const cooldown = cooldowns.get(key);
     const cooldownText = cooldown && cooldown.until > Date.now() ? ` | cooldown ${formatRemainingMs(cooldown.until - Date.now())} (Reason: ${cooldown.reason})` : "";
     const authText = target.authProvider ? `auth=${target.authProvider}` : "auth=builtin";
