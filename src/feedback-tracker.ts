@@ -93,7 +93,7 @@ export class FeedbackTracker {
   }
 }
 
-function isValidRating(r: unknown): boolean {
+export function isValidRating(r: unknown): boolean {
   if (!r || typeof r !== "object") return false;
   const o = r as Record<string, unknown>;
   return (

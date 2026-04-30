@@ -181,7 +181,7 @@ export class DecisionLogger {
   }
 }
 
-function isValidEntry(e: unknown): e is DecisionLogEntry {
+export function isValidEntry(e: unknown): e is DecisionLogEntry {
   if (!e || typeof e !== "object") return false;
   const o = e as Record<string, unknown>;
   return (

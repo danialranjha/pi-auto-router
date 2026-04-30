@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { DecisionLogger } from "../src/decision-logger.ts";
+import { DecisionLogger, isValidEntry } from "../src/decision-logger.ts";
 import type { DecisionLogEntry } from "../src/types.ts";
 
 function tempPath(): string {
@@ -147,5 +147,40 @@ describe("DecisionLogger", () => {
 
     const l2 = new DecisionLogger(10_000, f);
     assert.equal(l2.count, 3);
+  });
+});
+
+describe("isValidEntry", () => {
+  it("rejects null and non-objects", () => {
+    assert.equal(isValidEntry(null), false);
+    assert.equal(isValidEntry(undefined), false);
+    assert.equal(isValidEntry("string"), false);
+    assert.equal(isValidEntry(123), false);
+  });
+
+  it("rejects objects missing required string fields", () => {
+    assert.equal(isValidEntry({}), false);
+    assert.equal(isValidEntry({ routeId: "r" }), false);
+  });
+
+  it("rejects invalid outcome values", () => {
+    assert.equal(isValidEntry({
+      timestamp: 1, routeId: "r", tier: "swe", phase: "solve",
+      provider: "p", outcome: "partial_success",
+    }), false);
+  });
+
+  it("accepts valid entries with any of the three outcomes", () => {
+    const base = { timestamp: 1, routeId: "r", tier: "swe", phase: "solve", provider: "p" };
+    assert.equal(isValidEntry({ ...base, outcome: "success" }), true);
+    assert.equal(isValidEntry({ ...base, outcome: "terminal_error" }), true);
+    assert.equal(isValidEntry({ ...base, outcome: "exhausted" }), true);
+  });
+
+  it("rejects when timestamp is not a number", () => {
+    assert.equal(isValidEntry({
+      timestamp: "now", routeId: "r", tier: "swe", phase: "solve",
+      provider: "p", outcome: "success",
+    }), false);
   });
 });

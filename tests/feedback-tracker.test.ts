@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { FeedbackTracker, type Rating } from "../src/feedback-tracker.ts";
+import { FeedbackTracker, isValidRating, type Rating } from "../src/feedback-tracker.ts";
 
 const RATINGS_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "auto-router.ratings.json");
 
@@ -111,5 +111,33 @@ describe("FeedbackTracker", () => {
     const t = new FeedbackTracker();
     t.load();
     assert.equal(t.getRecent().length, 0);
+  });
+});
+
+describe("isValidRating", () => {
+  it("rejects null and non-objects", () => {
+    assert.equal(isValidRating(null), false);
+    assert.equal(isValidRating(undefined), false);
+    assert.equal(isValidRating("string"), false);
+    assert.equal(isValidRating([]), false);
+  });
+
+  it("rejects objects missing required fields", () => {
+    assert.equal(isValidRating({}), false);
+    assert.equal(isValidRating({ provider: "p" }), false);
+    assert.equal(isValidRating({ provider: "p", rating: "good" }), false);
+  });
+
+  it("rejects invalid rating values", () => {
+    assert.equal(isValidRating({ provider: "p", rating: "ok", timestamp: 1 }), false);
+    assert.equal(isValidRating({ provider: "p", rating: "excellent", timestamp: 1 }), false);
+  });
+
+  it("accepts valid good rating", () => {
+    assert.equal(isValidRating({ provider: "c", rating: "good", timestamp: 1 }), true);
+  });
+
+  it("accepts valid bad rating", () => {
+    assert.equal(isValidRating({ provider: "c", rating: "bad", timestamp: 1 }), true);
   });
 });
