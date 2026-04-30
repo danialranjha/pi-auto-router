@@ -15,7 +15,7 @@ import {
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { buildRoutingContext } from "./src/context-analyzer.ts";
 import { DEFAULT_SHORTCUTS, listShortcuts, parseShortcut } from "./src/shortcut-parser.ts";
-import { inferRequirements, solveConstraints, type CapabilityMap, type ConstraintRequirements } from "./src/constraint-solver.ts";
+import { inferRequirements, solveConstraints, tierToRequirements, type CapabilityMap, type ConstraintRequirements } from "./src/constraint-solver.ts";
 import { BudgetTracker, todayKey } from "./src/budget-tracker.ts";
 import { partitionAuditedCandidates } from "./src/candidate-partitioner.ts";
 import { QuotaCache, mapRouteProviderToOAuth } from "./src/quota-cache.ts";
@@ -866,14 +866,6 @@ function estimateModelCost(target: RouteTarget, context: Context, estimatedInput
   if (!cost) return null;
   const estimatedOutputTokens = estimatedInputTokens * 4;
   return (estimatedInputTokens * cost.inputUsd + estimatedOutputTokens * cost.outputUsd) / 1_000_000;
-}
-
-function tierToRequirements(tier: Tier | undefined, estimatedTokens: number): ConstraintRequirements {
-  const reqs: ConstraintRequirements = {};
-  if (tier === "vision") reqs.vision = true;
-  if (tier === "reasoning" || tier === "swe") reqs.reasoning = true;
-  if (tier === "long") reqs.minContextWindow = Math.max(estimatedTokens, 100_000);
-  return reqs;
 }
 
 function recordDecision(routeId: string, decision: RoutingDecision): void {

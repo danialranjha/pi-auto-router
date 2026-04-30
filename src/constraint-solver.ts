@@ -1,4 +1,4 @@
-import type { RouteTarget, RoutingContext } from "./types.ts";
+import type { RouteTarget, RoutingContext, Tier } from "./types.ts";
 
 export type CapabilityMap = {
   vision?: boolean;
@@ -89,4 +89,13 @@ export function inferRequirements(
     ...base,
     minContextWindow: Math.max(base.minContextWindow ?? 0, ctx.estimatedTokens),
   };
+}
+
+/** Map a routing tier to concrete constraint requirements. */
+export function tierToRequirements(tier: Tier | undefined, estimatedTokens: number): ConstraintRequirements {
+  const reqs: ConstraintRequirements = {};
+  if (tier === "vision") reqs.vision = true;
+  if (tier === "reasoning" || tier === "swe") reqs.reasoning = true;
+  if (tier === "long") reqs.minContextWindow = Math.max(estimatedTokens, 100_000);
+  return reqs;
 }

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { inferRequirements, solveConstraints } from "../src/constraint-solver.ts";
+import { inferRequirements, solveConstraints, tierToRequirements } from "../src/constraint-solver.ts";
 import type { RouteTarget, RoutingContext } from "../src/types.ts";
 
 const targets: RouteTarget[] = [
@@ -105,5 +105,49 @@ describe("inferRequirements", () => {
     assert.equal(reqs.vision, true);
     assert.equal(reqs.reasoning, true);
     assert.equal(reqs.minMaxTokens, 4_000);
+  });
+});
+
+describe("tierToRequirements", () => {
+  it("returns empty requirements for undefined tier", () => {
+    const reqs = tierToRequirements(undefined, 1000);
+    assert.equal(Object.keys(reqs).length, 0);
+  });
+
+  it("sets vision for vision tier", () => {
+    const reqs = tierToRequirements("vision", 1000);
+    assert.equal(reqs.vision, true);
+    assert.equal(reqs.reasoning, undefined);
+  });
+
+  it("sets reasoning for reasoning tier", () => {
+    const reqs = tierToRequirements("reasoning", 5000);
+    assert.equal(reqs.reasoning, true);
+    assert.equal(reqs.vision, undefined);
+  });
+
+  it("sets reasoning for swe tier", () => {
+    const reqs = tierToRequirements("swe", 5000);
+    assert.equal(reqs.reasoning, true);
+  });
+
+  it("sets minContextWindow for long tier", () => {
+    const reqs = tierToRequirements("long", 50000);
+    assert.equal(reqs.minContextWindow, 100_000);
+  });
+
+  it("uses estimatedTokens as minContextWindow when larger than 100k", () => {
+    const reqs = tierToRequirements("long", 150_000);
+    assert.equal(reqs.minContextWindow, 150_000);
+  });
+
+  it("returns empty for economy tier (no special requirements)", () => {
+    const reqs = tierToRequirements("economy", 1000);
+    assert.equal(Object.keys(reqs).length, 0);
+  });
+
+  it("returns empty for unknown tier values", () => {
+    const reqs = tierToRequirements(undefined as any, 1000);
+    assert.equal(Object.keys(reqs).length, 0);
   });
 });
