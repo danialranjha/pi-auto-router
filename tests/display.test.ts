@@ -151,9 +151,15 @@ describe("parseResetAfterMs", () => {
 });
 
 describe("getCooldownMs", () => {
-  it("detects rate limit / 429", () => {
+  it("detects rate limit / 429 / throttled", () => {
     assert.equal(getCooldownMs("429 Too Many Requests"), 2 * 60_000);
     assert.equal(getCooldownMs("rate limit exceeded"), 2 * 60_000);
+    assert.equal(getCooldownMs("Request throttled"), 2 * 60_000);
+  });
+
+  it("detects throttled variants", () => {
+    assert.equal(getCooldownMs("Throttled"), 2 * 60_000);
+    assert.equal(getCooldownMs("API request throttled, try again later"), 2 * 60_000);
   });
 
   it("detects quota / capacity / overload", () => {
