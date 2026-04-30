@@ -66,6 +66,7 @@ export function getCooldownMs(message: any): number {
 
   const text = String(message ?? "").toLowerCase();
   if (text.includes("429") || text.includes("rate limit") || text.includes("too many requests")) return 2 * 60_000;
+  if (text.includes("hit your limit") || text.includes("credits exhausted") || text.includes("insufficient balance")) return 30 * 60_000;
   if (text.includes("quota") || text.includes("capacity") || text.includes("overloaded") || text.includes("503")) return 5 * 60_000;
   if (/\b(404|410)\b/.test(text) || text.includes("not found") || text.includes("model not available") || text.includes("gone")) return 60 * 60_000;
   if (/\b400\b/.test(text) || text.includes("bad request") || text.includes("maximum context length") || text.includes("context_length_exceeded")) return 30_000;

@@ -579,7 +579,10 @@ function getHealthyTargets(routeId: string): RouteTarget[] {
     const token = target.authProvider ? getAccessToken(target.authProvider) : "builtin";
     if (!token) return false;
     const cooldown = cooldowns.get(getTargetKey(target, routeId));
-    return !cooldown || cooldown.until <= now;
+    if (cooldown && cooldown.until > now) return false;
+    // Circuit breaker: skip providers with an open circuit
+    if (circuitBreaker.isOpen(target.provider)) return false;
+    return true;
   });
 }
 

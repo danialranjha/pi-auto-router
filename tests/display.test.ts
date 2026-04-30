@@ -171,6 +171,12 @@ describe("getCooldownMs", () => {
     assert.equal(getCooldownMs("maximum context length exceeded"), 30_000);
   });
 
+  it("detects quota exhaustion (hit your limit / credits)", () => {
+    assert.equal(getCooldownMs("You've hit your limit"), 30 * 60_000);
+    assert.equal(getCooldownMs("credits exhausted"), 30 * 60_000);
+    assert.equal(getCooldownMs("insufficient balance"), 30 * 60_000);
+  });
+
   it("uses explicit reset-after when available", () => {
     const ms = getCooldownMs("rate limit hit, reset after 30 seconds");
     assert.equal(ms, 30_000 + 5_000);
