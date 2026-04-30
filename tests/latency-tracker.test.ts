@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { LatencyTracker } from "../src/latency-tracker.ts";
+import { LatencyTracker, isValidRecord } from "../src/latency-tracker.ts";
 
 const LATENCY_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "auto-router.latency.json");
 
@@ -98,5 +98,36 @@ describe("LatencyTracker", () => {
     assert.equal(tracker.getAvgLatency("a"), null);
     assert.equal(tracker.getAvgLatency("b"), null);
     assert.equal(tracker.getAll().size, 0);
+  });
+});
+
+describe("isValidRecord", () => {
+  it("rejects null and non-objects", () => {
+    assert.equal(isValidRecord(null), false);
+    assert.equal(isValidRecord(undefined), false);
+    assert.equal(isValidRecord("string"), false);
+    assert.equal(isValidRecord(123), false);
+  });
+
+  it("rejects objects missing count or totalMs", () => {
+    assert.equal(isValidRecord({}), false);
+    assert.equal(isValidRecord({ count: 1 }), false);
+    assert.equal(isValidRecord({ totalMs: 100 }), false);
+  });
+
+  it("rejects negative counts", () => {
+    assert.equal(isValidRecord({ count: -1, totalMs: 100 }), false);
+  });
+
+  it("rejects negative totalMs", () => {
+    assert.equal(isValidRecord({ count: 1, totalMs: -100 }), false);
+  });
+
+  it("accepts valid record with zero values", () => {
+    assert.equal(isValidRecord({ count: 0, totalMs: 0 }), true);
+  });
+
+  it("accepts valid latency record", () => {
+    assert.equal(isValidRecord({ count: 5, totalMs: 500, lastMs: 100, updatedAt: 1 }), true);
   });
 });

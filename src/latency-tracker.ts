@@ -92,7 +92,7 @@ export class LatencyTracker {
   }
 }
 
-function isValidRecord(rec: unknown): boolean {
+export function isValidRecord(rec: unknown): boolean {
   if (!rec || typeof rec !== "object") return false;
   const r = rec as Record<string, unknown>;
   return (
