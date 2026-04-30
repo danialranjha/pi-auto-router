@@ -19,7 +19,7 @@ export type BudgetAuditResult = {
 
 export type BudgetType = "daily" | "monthly";
 
-function auditUsd(provider: string, budgetState: BudgetState | undefined, estimatedAdditionalUsd: number): BudgetAuditResult {
+export function auditUsd(provider: string, budgetState: BudgetState | undefined, estimatedAdditionalUsd: number): BudgetAuditResult {
   // First try monthly limit (for per-token providers)
   const monthlyLimit = budgetState?.monthlyLimit?.[provider];
   const monthlySpend = budgetState?.monthlySpend?.[provider];
@@ -98,7 +98,7 @@ function auditUsd(provider: string, budgetState: BudgetState | undefined, estima
   return { status: "ok", provider, spend, limit, remaining, usageRatio, budgetType: "daily" };
 }
 
-function applyUtilization(base: BudgetAuditResult, util: UtilizationSnapshot | undefined, provider: string): BudgetAuditResult {
+export function applyUtilization(base: BudgetAuditResult, util: UtilizationSnapshot | undefined, provider: string): BudgetAuditResult {
   if (!util) return base;
   const result: BudgetAuditResult = { ...base, uvi: util.uvi, utilizationStatus: util.status, utilizationReason: util.reason };
 

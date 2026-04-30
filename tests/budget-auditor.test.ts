@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { auditBudget } from "../src/budget-auditor.ts";
+import { auditBudget, auditUsd, applyUtilization } from "../src/budget-auditor.ts";
 import type { UVIStatus, UtilizationSnapshot } from "../src/types.ts";
 
 function snap(provider: string, status: UVIStatus, uvi: number): UtilizationSnapshot {
@@ -86,5 +86,89 @@ describe("auditBudget", () => {
     });
     assert.equal(result.status, "blocked");
     assert.equal(result.hint, undefined);
+  });
+});
+
+describe("auditUsd", () => {
+  it("returns ok with null limit when no limits configured", () => {
+    const result = auditUsd("test-provider", { dailySpend: {}, dailyLimit: {} }, 0);
+    assert.equal(result.status, "ok");
+    assert.equal(result.limit, null);
+    assert.equal(result.remaining, null);
+  });
+
+  it("prefers monthly limit over daily for per-token providers", () => {
+    const result = auditUsd("deepseek", {
+      dailySpend: {},
+      dailyLimit: { deepseek: 50 },
+      monthlySpend: { deepseek: 95 },
+      monthlyLimit: { deepseek: 100 },
+    }, 0);
+    assert.equal(result.status, "warning");
+    assert.equal(result.budgetType, "monthly");
+    assert.equal(result.limit, 100);
+  });
+
+  it("warns at exactly 80% of daily limit", () => {
+    const result = auditUsd("prov", {
+      dailySpend: { prov: 8 },
+      dailyLimit: { prov: 10 },
+    }, 0);
+    assert.equal(result.status, "warning");
+  });
+
+  it("blocks when projected exceeds daily limit", () => {
+    const result = auditUsd("prov", {
+      dailySpend: { prov: 9.5 },
+      dailyLimit: { prov: 10 },
+    }, 1);
+    assert.equal(result.status, "blocked");
+  });
+
+  it("handles zero limit gracefully", () => {
+    const result = auditUsd("prov", {
+      dailySpend: {},
+      dailyLimit: { prov: 0 },
+    }, 0);
+    assert.equal(result.status, "ok");
+    assert.equal(result.limit, null);
+  });
+
+  it("handles missing spend for provider with limit", () => {
+    const result = auditUsd("prov", {
+      dailySpend: {},
+      dailyLimit: { prov: 10 },
+    }, 0);
+    assert.equal(result.status, "ok");
+    assert.equal(result.spend, 0);
+  });
+});
+
+describe("applyUtilization", () => {
+  it("returns base unchanged when util is undefined", () => {
+    const base = { status: "ok" as const, provider: "p", spend: 0, limit: null, remaining: null, usageRatio: null };
+    const result = applyUtilization(base, undefined, "p");
+    assert.equal(result.status, "ok");
+  });
+
+  it("sets blocked status for critical UVI", () => {
+    const base = { status: "ok" as const, provider: "p", spend: 0, limit: null, remaining: null, usageRatio: null };
+    const result = applyUtilization(base, snap("p", "critical", 2.5), "p");
+    assert.equal(result.status, "blocked");
+    assert.equal(result.uvi, 2.5);
+    assert.equal(result.utilizationStatus, "critical");
+  });
+
+  it("sets promote hint for surplus UVI", () => {
+    const base = { status: "ok" as const, provider: "p", spend: 0, limit: null, remaining: null, usageRatio: null };
+    const result = applyUtilization(base, snap("p", "surplus", 0.3), "p");
+    assert.equal(result.hint, "promote");
+  });
+
+  it("preserves existing warning status with stressed UVI", () => {
+    const base = { status: "warning" as const, provider: "p", spend: 0, limit: 10, remaining: 2, usageRatio: 0.8 };
+    const result = applyUtilization(base, snap("p", "stressed", 1.5), "p");
+    assert.equal(result.status, "warning");
+    assert.equal(result.hint, "demote");
   });
 });
