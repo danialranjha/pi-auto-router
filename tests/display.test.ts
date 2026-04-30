@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine } from "../src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine } from "../src/display.ts";
 import type { ModelDisplayInfo } from "../src/display.ts";
 import type { RouteTarget, RoutingHints } from "../src/types.ts";
 
@@ -250,6 +250,43 @@ describe("normalizeModelToken", () => {
 
   it("handles already clean input", () => {
     assert.equal(normalizeModelToken("gpt4"), "gpt4");
+  });
+});
+
+describe("findCaseInsensitiveKey", () => {
+  const aliases: Record<string, string[]> = {
+    "reasoning": ["auto-router/subscription-reasoning"],
+    "swe": ["auto-router/subscription-swe"],
+    "Claude": ["claude-agent-sdk/claude-opus-4-7"],
+  };
+
+  it("finds exact match", () => {
+    assert.equal(findCaseInsensitiveKey(aliases, "reasoning"), "reasoning");
+  });
+
+  it("finds case-insensitive match", () => {
+    assert.equal(findCaseInsensitiveKey(aliases, "REASONING"), "reasoning");
+    assert.equal(findCaseInsensitiveKey(aliases, "Reasoning"), "reasoning");
+  });
+
+  it("returns key with original casing", () => {
+    assert.equal(findCaseInsensitiveKey(aliases, "claude"), "Claude");
+  });
+
+  it("returns undefined for no match", () => {
+    assert.equal(findCaseInsensitiveKey(aliases, "fast"), undefined);
+  });
+
+  it("handles empty string needle", () => {
+    assert.equal(findCaseInsensitiveKey(aliases, ""), undefined);
+  });
+
+  it("handles undefined needle", () => {
+    assert.equal(findCaseInsensitiveKey(aliases, undefined as any), undefined);
+  });
+
+  it("returns undefined for empty record", () => {
+    assert.equal(findCaseInsensitiveKey({}, "anything"), undefined);
   });
 });
 

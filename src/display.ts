@@ -103,6 +103,12 @@ export function normalizeModelToken(value: string): string {
     .trim();
 }
 
+/** Case-insensitive key lookup in a record. Returns the actual key or undefined. */
+export function findCaseInsensitiveKey<T>(record: Record<string, T>, needle: string): string | undefined {
+  const normalized = String(needle ?? "").toLowerCase();
+  return Object.keys(record).find((key) => String(key ?? "").toLowerCase() === normalized);
+}
+
 /** Env var candidate names for a given provider (e.g. "ollama" → OLLAMA_API_KEY, OLLAMA_KEY). */
 export function providerApiKeyEnvVars(provider: string): string[] {
   const upper = provider.toUpperCase();
