@@ -25,7 +25,7 @@ import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-cl
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv } from "./src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -1381,15 +1381,6 @@ function routeSummary(routeId: string): string {
     (() => { const l = getPrimaryModelLimits(route); return `thinking=${route.reasoning !== false} | vision=${(route.input ?? ["text", "image"]).includes("image")} | ctx=${l.contextWindow.toLocaleString()} | max=${l.maxTokens.toLocaleString()}${route.contextWindow ? " (forced)" : ""}`; })(),
     ...lines
   ].join("\n");
-}
-
-function formatModelLine(model: { provider: string; id: string; name: string; reasoning: boolean; input: readonly string[]; contextWindow: number; maxTokens: number; cost: { input: number; output: number } }, currentModel: { provider?: string; id?: string } | null | undefined): string {
-  const current = currentModel && model.provider === currentModel.provider && model.id === currentModel.id;
-  const marker = current ? " (current)" : "";
-  const capabilities = [model.reasoning ? "reasoning" : null, model.input.includes("image") ? "vision" : null].filter(Boolean).join(", ");
-  const capabilityText = capabilities ? ` [${capabilities}]` : "";
-  const costText = `$${model.cost.input.toFixed(2)}/$${model.cost.output.toFixed(2)} per 1M tokens (in/out)`;
-  return `${model.provider}/${model.id}${marker}${capabilityText}\n  ${model.name} | ctx: ${model.contextWindow.toLocaleString()} | max: ${model.maxTokens.toLocaleString()}\n  ${costText}`;
 }
 
 function searchModels(query: string, ctx: any): string {

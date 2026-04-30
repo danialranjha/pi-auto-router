@@ -97,3 +97,28 @@ export function resolveProviderApiKeyFromEnv(provider: string): string | undefin
   }
   return undefined;
 }
+
+/** Model descriptor with cost info (mirrors Model<Api> fields used for display). */
+export interface ModelDisplayInfo {
+  provider: string;
+  id: string;
+  name: string;
+  reasoning: boolean;
+  input: readonly string[];
+  contextWindow: number;
+  maxTokens: number;
+  cost: { input: number; output: number };
+}
+
+/** Format a single model line for /auto-router models output. */
+export function formatModelLine(
+  model: ModelDisplayInfo,
+  currentModel: { provider?: string; id?: string } | null | undefined,
+): string {
+  const current = currentModel && model.provider === currentModel.provider && model.id === currentModel.id;
+  const marker = current ? " (current)" : "";
+  const capabilities = [model.reasoning ? "reasoning" : null, model.input.includes("image") ? "vision" : null].filter(Boolean).join(", ");
+  const capabilityText = capabilities ? ` [${capabilities}]` : "";
+  const costText = `$${model.cost.input.toFixed(2)}/$${model.cost.output.toFixed(2)} per 1M tokens (in/out)`;
+  return `${model.provider}/${model.id}${marker}${capabilityText}\n  ${model.name} | ctx: ${model.contextWindow.toLocaleString()} | max: ${model.maxTokens.toLocaleString()}\n  ${costText}`;
+}
