@@ -260,7 +260,7 @@ const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
     input: ["text", "image"],
     targets: [
       { provider: "claude-agent-sdk", modelId: "claude-opus-4-6", label: "Claude Opus 4.6 via Claude Code" },
-      { provider: "google-antigravity", modelId: "gemini-3.1-pro-high", authProvider: "google-antigravity", label: "Gemini 3.1 Pro" },
+      { provider: "google", modelId: "gemini-2.5-pro", label: "Gemini 2.5 Pro via API key", billing: "per-token" },
       { provider: "openai-codex", modelId: "gpt-5.4", authProvider: "openai-codex", label: "GPT-5.4" },
       { provider: "claude-agent-sdk", modelId: "claude-opus-4-5", label: "Claude Opus 4.5 via Claude Code" },
       { provider: "ollama", modelId: "glm-5.1:cloud", label: "GLM-5.1 via Ollama Cloud Subscription" }
@@ -273,7 +273,7 @@ const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
     targets: [
       { provider: "claude-agent-sdk", modelId: "claude-opus-4-6", label: "Claude Opus 4.6 via Claude Code" },
       { provider: "openai-codex", modelId: "gpt-5.4", authProvider: "openai-codex", label: "GPT-5.4" },
-      { provider: "google-antigravity", modelId: "gemini-3.1-pro-high", authProvider: "google-antigravity", label: "Gemini 3.1 Pro" },
+      { provider: "google", modelId: "gemini-2.5-pro", label: "Gemini 2.5 Pro via API key", billing: "per-token" },
       { provider: "nvidia", modelId: "deepseek-ai/deepseek-v3.2", label: "DeepSeek v3.2 via NVIDIA" },
       { provider: "claude-agent-sdk", modelId: "claude-opus-4-5", label: "Claude Opus 4.5 via Claude Code" },
       { provider: "ollama", modelId: "glm-5.1:cloud", label: "GLM-5.1 via Ollama Cloud Subscription" }
@@ -284,7 +284,7 @@ const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
     reasoning: true,
     input: ["text", "image"],
     targets: [
-      { provider: "google-antigravity", modelId: "gemini-3-flash", authProvider: "google-antigravity", label: "Gemini 3 Flash" },
+      { provider: "google", modelId: "gemini-2.5-flash", label: "Gemini 2.5 Flash via API key", billing: "per-token" },
       { provider: "openai-codex", modelId: "gpt-5.4-mini", authProvider: "openai-codex", label: "GPT-5.4 Mini" },
       { provider: "claude-agent-sdk", modelId: "claude-sonnet-4-5", label: "Claude Sonnet 4.5 via Claude Code" },
       { provider: "openai-codex", modelId: "gpt-5.2-codex", authProvider: "openai-codex", label: "GPT-5.2 Codex" },
@@ -299,7 +299,7 @@ const DEFAULT_ALIASES: AliasConfig = {
   fast: ["auto-router/subscription-fast"],
   glm: ["ollama/glm-5.1:cloud"],
   claude: ["claude-agent-sdk/claude-opus-4-6", "claude-agent-sdk/claude-opus-4-5"],
-  gemini: ["google-antigravity/gemini-3.1-pro-high", "google-antigravity/gemini-3-flash"],
+  gemini: ["google/gemini-2.5-pro", "google/gemini-2.5-flash"],
   deepseek: ["nvidia/deepseek-ai/deepseek-v3.2"],
   nvidia: ["nvidia/deepseek-ai/deepseek-v3.2"],
   codex: ["openai-codex/gpt-5.4", "openai-codex/gpt-5.2-codex"]

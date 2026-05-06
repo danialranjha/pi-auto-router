@@ -35,10 +35,10 @@
           "label": "L3: GPT-5.4"
         },
         {
-          "provider": "google-antigravity",
-          "modelId": "gemini-3.1-pro-high",
-          "authProvider": "google-antigravity",
-          "label": "L4: Gemini 3.1 Pro (Multimodal Logic)"
+          "provider": "google",
+          "modelId": "gemini-2.5-pro",
+          "label": "L4: Gemini 2.5 Pro (API Key)",
+          "billing": "per-token"
         },
         {
           "provider": "ollama",
@@ -72,10 +72,10 @@
           "label": "L3: GPT-5.4 (Alternative SOTA)"
         },
         {
-          "provider": "google-antigravity",
-          "modelId": "gemini-3.1-pro-high",
-          "authProvider": "google-antigravity",
-          "label": "L4: Gemini 3.1 Pro (Frontier Fallback)"
+          "provider": "google",
+          "modelId": "gemini-2.5-pro",
+          "label": "L4: Gemini 2.5 Pro (API Key Fallback)",
+          "billing": "per-token"
         },
         {
           "provider": "ollama",
@@ -109,10 +109,10 @@
       "maxTokens": 128000,
       "targets": [
         {
-          "provider": "google-antigravity",
-          "modelId": "gemini-3.1-pro-high",
-          "authProvider": "google-antigravity",
-          "label": "L1: Gemini 3.1 Pro (1.5M Context)"
+          "provider": "google",
+          "modelId": "gemini-2.5-pro",
+          "label": "L1: Gemini 2.5 Pro (API Key Long Context)",
+          "billing": "per-token"
         },
         {
           "provider": "claude-agent-sdk",
@@ -153,10 +153,10 @@
           "label": "L2: GLM 5.1 (NVIDIA NIM)"
         },
         {
-          "provider": "google-antigravity",
-          "modelId": "gemini-3-flash",
-          "authProvider": "google-antigravity",
-          "label": "L3: Gemini 3 Flash (Fast/Cheap)"
+          "provider": "google",
+          "modelId": "gemini-2.5-flash",
+          "label": "L3: Gemini 2.5 Flash (API Key Fast/Cheap)",
+          "billing": "per-token"
         },
         {
           "provider": "claude-agent-sdk",
@@ -173,10 +173,10 @@
       "maxTokens": 16384,
       "targets": [
         {
-          "provider": "google-antigravity",
-          "modelId": "gemini-3-flash",
-          "authProvider": "google-antigravity",
-          "label": "L1: Gemini 3 Flash"
+          "provider": "google",
+          "modelId": "gemini-2.5-flash",
+          "label": "L1: Gemini 2.5 Flash (API Key)",
+          "billing": "per-token"
         },
         {
           "provider": "claude-agent-sdk",
@@ -209,8 +209,8 @@
       "claude-agent-sdk/claude-opus-4-6"
     ],
     "gemini": [
-      "google-antigravity/gemini-3.1-pro-high",
-      "google-antigravity/gemini-3-flash"
+      "google/gemini-2.5-pro",
+      "google/gemini-2.5-flash"
     ],
     "deepseek": [
       "deepseek/deepseek-v4-pro",

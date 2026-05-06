@@ -309,6 +309,12 @@ describe("providerApiKeyEnvVars", () => {
     assert.ok(vars.includes("OLLAMA_KEY"));
   });
 
+  it("generates expected env vars for google provider", () => {
+    const vars = providerApiKeyEnvVars("google");
+    assert.ok(vars.includes("GOOGLE_API_KEY"));
+    assert.ok(vars.includes("GOOGLE_KEY"));
+  });
+
   it("generates underscore variant for dashed provider names", () => {
     const vars = providerApiKeyEnvVars("openai-codex");
     assert.ok(vars.includes("OPENAI_CODEX_API_KEY"));
@@ -339,6 +345,17 @@ describe("resolveProviderApiKeyFromEnv", () => {
     } finally {
       if (original !== undefined) process.env.DEEPSEEK_API_KEY = original;
       else delete process.env.DEEPSEEK_API_KEY;
+    }
+  });
+
+  it("returns key from GOOGLE_API_KEY env var", () => {
+    const original = process.env.GOOGLE_API_KEY;
+    process.env.GOOGLE_API_KEY = "sk-test-google";
+    try {
+      assert.equal(resolveProviderApiKeyFromEnv("google"), "sk-test-google");
+    } finally {
+      if (original !== undefined) process.env.GOOGLE_API_KEY = original;
+      else delete process.env.GOOGLE_API_KEY;
     }
   });
 });

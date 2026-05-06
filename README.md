@@ -120,10 +120,10 @@ cp auto-router.routes.example.json ~/.pi/agent/extensions/auto-router.routes.jso
           "label": "L1: Claude Opus 4.7 (Frontier)"
         },
         {
-          "provider": "google-antigravity",
-          "modelId": "gemini-3.1-pro-high",
-          "authProvider": "google-antigravity",
-          "label": "L2: Gemini 3.1 Pro (Multimodal Logic)"
+          "provider": "google",
+          "modelId": "gemini-2.5-pro",
+          "label": "L2: Gemini 2.5 Pro (API Key)",
+          "billing": "per-token"
         },
         {
           "provider": "openai-codex",
@@ -164,6 +164,8 @@ Each route target supports:
 Use `authProvider` for providers whose OAuth/access token should be read from pi auth storage.
 Skip it for providers that authenticate internally or don’t require pi-managed tokens for the request path.
 
+For Gemini API-key routes, use your installed Gemini provider id (examples here use `google`), omit `authProvider`, set `billing` to `"per-token"`, and provide `GOOGLE_API_KEY` or `GOOGLE_KEY` in the environment.
+
 ## Commands
 
 `auto-router` registers:
@@ -202,7 +204,7 @@ Skip it for providers that authenticate internally or don’t require pi-managed
 /auto-router explain
 /auto-router shortcuts
 /auto-router budget show
-/auto-router budget set google-antigravity 5.00
+/auto-router budget set google 20.00 monthly
 /auto-router budget set deepseek 20.00 monthly
 /auto-router balance show
 /auto-router balance fetch
@@ -267,7 +269,7 @@ Manage budgets with:
 ```text
 /auto-router budget show
 /auto-router budget set claude-agent-sdk 10.00
-/auto-router budget set google-antigravity 5.00
+/auto-router budget set google 20.00 monthly
 /auto-router budget clear openai-codex
 ```
 
@@ -407,8 +409,8 @@ Shadow mode: 🟢 enabled
 
 Last shadow comparison:
   Route: subscription-reasoning
-    Pipeline would pick: Gemini 3.1 Pro → Claude Opus 4.6 → GPT-5.4
-    Actually used:      Claude Opus 4.6 → Gemini 3.1 Pro → GPT-5.4
+    Pipeline would pick: Gemini 2.5 Pro → Claude Opus 4.6 → GPT-5.4
+    Actually used:      Claude Opus 4.6 → Gemini 2.5 Pro → GPT-5.4
     Match: ❌ different
 ```
 
@@ -444,7 +446,7 @@ Ratings are persisted in `~/.pi/agent/extensions/auto-router.ratings.json`. Per-
 The status line surfaces routing state at a glance:
 
 ```text
-auto-router Subscription Premium Router 🔬 shadow | tier=reasoning (0.90) | current: GPT-5.4 | healthy: …, … | ⚠ google-antigravity: 87% of $5.00 daily budget used | uvi: anthropic=1.64 stressed
+auto-router Subscription Premium Router 🔬 shadow | tier=reasoning (0.90) | current: GPT-5.4 | healthy: …, … | ⚠ google: 87% of $20.00 monthly budget used | uvi: anthropic=1.64 stressed
 ```
 
 - `🔬 shadow` appears when shadow mode is enabled
@@ -463,11 +465,11 @@ auto-router Subscription Premium Router 🔬 shadow | tier=reasoning (0.90) | cu
 
 ## Default routes
 
-The repository ships with opinionated defaults oriented around subscription-backed providers plus Ollama Cloud fallback:
+The repository ships with opinionated defaults oriented around subscription-backed providers plus API-key Gemini and Ollama Cloud fallback:
 
 - Claude Code via `claude-agent-sdk`
 - OpenAI Codex
-- Google Antigravity
+- Google Gemini via API key (`google`, billed per-token)
 - NVIDIA DeepSeek (`deepseek-ai/deepseek-v3.2`)
 - Ollama Cloud (`glm-5.1:cloud`)
 
