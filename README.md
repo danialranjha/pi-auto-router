@@ -319,7 +319,7 @@ UVI status also appears in `/auto-router budget` and `/auto-router explain` outp
 
 ## Utilization Velocity Index (UVI)
 
-UVI measures how fast you're consuming quota or budget and adjusts routing priority in real time. For subscription providers, it fetches usage data from provider quota APIs (`openai-codex`, `anthropic`, `google-gemini-cli`, `google-antigravity`). For per-token providers, it uses monthly spend vs. budget. UVI is computed as:
+UVI measures how fast you're consuming quota or budget and adjusts routing priority in real time. For subscription providers, it fetches usage data from provider quota APIs (`openai-codex`, `anthropic`). For per-token providers such as Gemini API-key routes or DeepSeek, it uses monthly spend vs. budget. UVI is computed as:
 
 ```
 UVI = consumed_fraction / elapsed_fraction_of_window
@@ -363,9 +363,8 @@ Example output:
 ```text
 UVI (enabled):
   anthropic              UVI= 1.64 stressed  | 5hr@38%, 7d@68%
-  openai-codex            UVI= 0.81 ok        | 1m@5%, 1d@61%
-  google-antigravity      UVI= 0.00 ok        | daily@1%
-  google-gemini-cli       UVI= 0.00 ok        | daily@1%
+  openai-codex           UVI= 0.81 ok        | 1m@5%, 1d@61%
+  google                 UVI= 0.22 ok        | monthly@18%
 ```
 
 When a provider’s UVI is `stressed` or `critical`, it also appears in the status line:

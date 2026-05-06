@@ -4,7 +4,7 @@
 - **Feedback-driven rules**: Wire FeedbackTracker ratings into PolicyEngine. Requires real feedback data (needs actual pi usage to populate ratings).
 
 ## Routing Quality
-- **Replace broken Gemini 3.1 Pro**: Default routes still reference google-antigravity/gemini-3.1-pro-high which returns "no longer supported". Replace with google-gemini-cli equivalents. Config-only change — no code impact.
+- **Gemini per-token visibility**: New default Gemini routes use API keys (`google/gemini-2.5-pro`, `google/gemini-2.5-flash`) and monthly budgets, but they still lack provider-specific balance/quota fetching for richer UVI/status reporting.
 - **Tier-differentiated routing**: IntentToTier maps "analysis"→"reasoning" and "code"→"swe", but RouteTarget has no tier field. Would require schema changes and constraint solver modifications.
 
 ## Architecture
