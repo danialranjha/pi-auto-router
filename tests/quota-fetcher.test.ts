@@ -1,21 +1,28 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   CLAUDE_FIVE_HOUR_WINDOW_MS,
   CLAUDE_SEVEN_DAY_WINDOW_MS,
   CODEX_PRIMARY_WINDOW_MS,
   CODEX_SECONDARY_WINDOW_MS,
   GOOGLE_DAILY_WINDOW_MS,
+  ensureFreshAuthForProviders,
   fetchAllUsages,
   fetchClaudeUsage,
   fetchCodexUsage,
   fetchGoogleUsage,
   parseGoogleQuotaBuckets,
   parseRetryAfterMs,
+  readAuth,
   readPercentCandidate,
   usageToWindows,
+  writeAuth,
   type FetchLike,
   type FetchResponseLike,
+  type OAuthProviderId,
 } from "../src/quota-fetcher.ts";
 
 function mockResponse(body: any, init: { status?: number; ok?: boolean; headers?: Record<string, string> } = {}): FetchResponseLike {
@@ -65,6 +72,133 @@ describe("parseRetryAfterMs", () => {
   });
   it("returns null for garbage", () => {
     assert.equal(parseRetryAfterMs("nope"), null);
+  });
+});
+
+describe("readAuth/writeAuth", () => {
+  it("returns null for missing auth file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quota-auth-missing-"));
+    const authFile = path.join(dir, "auth.json");
+    assert.equal(readAuth(authFile), null);
+  });
+
+  it("returns null for invalid JSON", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quota-auth-invalid-"));
+    const authFile = path.join(dir, "auth.json");
+    fs.writeFileSync(authFile, "{not json");
+    assert.equal(readAuth(authFile), null);
+  });
+
+  it("writes auth atomically and round-trips via readAuth", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quota-auth-roundtrip-"));
+    const authFile = path.join(dir, "nested", "auth.json");
+    const auth = {
+      "openai-codex": { access: "token-a", refresh: "refresh-a", expires: 123 },
+      anthropic: { access: "token-b" },
+    };
+    assert.equal(writeAuth(auth, authFile), true);
+    assert.deepEqual(readAuth(authFile), auth);
+    const leftovers = fs.readdirSync(path.dirname(authFile)).filter((name) => name.includes(".tmp-"));
+    assert.deepEqual(leftovers, []);
+  });
+});
+
+describe("ensureFreshAuthForProviders", () => {
+  it("refreshes expired credentials, deduplicates provider ids, and persists the result", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quota-auth-refresh-"));
+    const authFile = path.join(dir, "auth.json");
+    const auth = {
+      anthropic: { access: "old-token", refresh: "refresh-token", expires: 1000 },
+    };
+    let calls = 0;
+    const resolverProviders: OAuthProviderId[] = [];
+
+    const result = await ensureFreshAuthForProviders(["anthropic", "anthropic"], {
+      auth,
+      authFile,
+      nowMs: 5000,
+      oauthResolver: async (providerId, credentials) => {
+        calls++;
+        resolverProviders.push(providerId);
+        assert.equal(credentials.anthropic?.access, "old-token");
+        return {
+          apiKey: "resolved-key",
+          newCredentials: { access: "new-token", expires: 50_000 },
+        };
+      },
+    });
+
+    assert.equal(calls, 1);
+    assert.deepEqual(resolverProviders, ["anthropic"]);
+    assert.equal(result.changed, true);
+    assert.equal(result.auth?.anthropic?.access, "new-token");
+    assert.equal(readAuth(authFile)?.anthropic?.access, "new-token");
+  });
+
+  it("supports forced refresh even when access token is not expired", async () => {
+    const auth = {
+      "openai-codex": { access: "current", refresh: "refresh", expires: 999_999 },
+    };
+    let calls = 0;
+
+    const result = await ensureFreshAuthForProviders(["openai-codex"], {
+      auth,
+      nowMs: 1000,
+      persist: false,
+      forceRefreshProviders: ["openai-codex"],
+      oauthResolver: async () => {
+        calls++;
+        return { apiKey: "resolved", newCredentials: { access: "forced", expires: 1_000_000 } };
+      },
+    });
+
+    assert.equal(calls, 1);
+    assert.equal(result.changed, true);
+    assert.equal(result.auth?.["openai-codex"]?.access, "forced");
+  });
+
+  it("skips providers without refresh tokens and leaves auth unchanged", async () => {
+    const auth = {
+      anthropic: { access: "token-without-refresh", expires: 0 },
+    };
+    let calls = 0;
+
+    const result = await ensureFreshAuthForProviders(["anthropic"], {
+      auth,
+      nowMs: 1000,
+      persist: false,
+      oauthResolver: async () => {
+        calls++;
+        return { apiKey: "unused", newCredentials: { access: "new-token" } };
+      },
+    });
+
+    assert.equal(calls, 0);
+    assert.equal(result.changed, false);
+    assert.equal(result.auth?.anthropic?.access, "token-without-refresh");
+  });
+
+  it("records resolver failures and missing OAuth credentials without crashing", async () => {
+    const auth = {
+      anthropic: { access: "old-a", refresh: "refresh-a", expires: 0 },
+      "google-gemini-cli": { access: "old-g", refresh: "refresh-g", expires: 0 },
+    };
+
+    const result = await ensureFreshAuthForProviders(["anthropic", "google-gemini-cli"], {
+      auth,
+      nowMs: 1000,
+      persist: false,
+      oauthResolver: async (providerId) => {
+        if (providerId === "anthropic") throw new Error("resolver boom");
+        return null;
+      },
+    });
+
+    assert.equal(result.changed, false);
+    assert.match(result.refreshErrors.anthropic ?? "", /resolver boom/);
+    assert.match(result.refreshErrors["google-gemini-cli"] ?? "", /missing OAuth credentials/);
+    assert.equal(result.auth?.anthropic?.access, "old-a");
+    assert.equal(result.auth?.["google-gemini-cli"]?.access, "old-g");
   });
 });
 
