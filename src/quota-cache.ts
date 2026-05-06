@@ -79,6 +79,15 @@ export class QuotaCache {
     writeUviEnabledToSettings(enabled);
   }
 
+  setProviderFilter(providerIds: OAuthProviderId[]): void {
+    const next = Array.from(new Set(providerIds));
+    this.fetchConfig = { ...this.fetchConfig, providerIds: next };
+    const allowed = new Set(next);
+    for (const id of OAUTH_PROVIDERS) {
+      if (!allowed.has(id)) this.snapshots.delete(id);
+    }
+  }
+
   getSnapshot(oauthProvider: OAuthProviderId): UtilizationSnapshot | undefined {
     return this.snapshots.get(oauthProvider);
   }
@@ -113,12 +122,15 @@ export class QuotaCache {
 
   private async refresh(): Promise<void> {
     const now = Date.now();
+    const providerIds: OAuthProviderId[] = this.fetchConfig.providerIds && this.fetchConfig.providerIds.length > 0
+      ? Array.from(new Set(this.fetchConfig.providerIds))
+      : OAUTH_PROVIDERS;
     let usages: UsageByProvider = {};
     try {
       usages = await fetchAllUsages(this.fetchConfig);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      for (const id of OAUTH_PROVIDERS) {
+      for (const id of providerIds) {
         const prev = this.snapshots.get(id);
         this.snapshots.set(id, {
           provider: id,
@@ -135,7 +147,7 @@ export class QuotaCache {
       return;
     }
 
-    for (const id of OAUTH_PROVIDERS) {
+    for (const id of providerIds) {
       const usage = usages[id];
       if (!usage) {
         // No auth or skipped; clear so we don't show stale data.

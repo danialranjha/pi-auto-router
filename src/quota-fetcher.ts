@@ -96,6 +96,7 @@ export interface FreshAuthResult {
 
 export interface FetchAllUsagesConfig extends FetchConfig, EnsureFreshAuthConfig {
   cacheFile?: string;
+  providerIds?: OAuthProviderId[];
 }
 
 const DEFAULT_FETCH_TIMEOUT_MS = 12_000;
@@ -460,7 +461,9 @@ export async function fetchAllUsages(config: FetchAllUsagesConfig = {}): Promise
   const results: UsageByProvider = {};
   if (!auth) return results;
 
-  const oauthProviders: OAuthProviderId[] = ["openai-codex", "anthropic", "google-gemini-cli", "google-antigravity"];
+  const oauthProviders: OAuthProviderId[] = config.providerIds && config.providerIds.length > 0
+    ? Array.from(new Set(config.providerIds))
+    : ["openai-codex", "anthropic", "google-gemini-cli", "google-antigravity"];
   const refreshed = await ensureFreshAuthForProviders(oauthProviders, { ...config, auth, authFile });
   const authData = refreshed.auth ?? auth;
 
@@ -478,19 +481,19 @@ export async function fetchAllUsages(config: FetchAllUsagesConfig = {}): Promise
     );
   };
 
-  if (authData["openai-codex"]?.access) {
+  if (oauthProviders.includes("openai-codex") && authData["openai-codex"]?.access) {
     const err = refreshError("openai-codex");
     if (err) results["openai-codex"] = { session: 0, weekly: 0, error: err };
     else assign("openai-codex", fetchCodexUsage(authData["openai-codex"].access, config));
   }
 
-  if (authData.anthropic?.access) {
+  if (oauthProviders.includes("anthropic") && authData.anthropic?.access) {
     const err = refreshError("anthropic");
     if (err) results.anthropic = { session: 0, weekly: 0, error: err };
     else assign("anthropic", fetchClaudeUsage(authData.anthropic.access, config));
   }
 
-  if (authData["google-gemini-cli"]?.access) {
+  if (oauthProviders.includes("google-gemini-cli") && authData["google-gemini-cli"]?.access) {
     const err = refreshError("google-gemini-cli");
     if (err) results["google-gemini-cli"] = { session: 0, weekly: 0, error: err };
     else {
@@ -499,7 +502,7 @@ export async function fetchAllUsages(config: FetchAllUsagesConfig = {}): Promise
     }
   }
 
-  if (authData["google-antigravity"]?.access) {
+  if (oauthProviders.includes("google-antigravity") && authData["google-antigravity"]?.access) {
     const err = refreshError("google-antigravity");
     if (err) results["google-antigravity"] = { session: 0, weekly: 0, error: err };
     else {

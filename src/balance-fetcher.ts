@@ -123,6 +123,13 @@ const FETCHERS: Record<string, BalanceFetcher> = {
   deepseek: fetchDeepSeekBalance,
 };
 
+export function supportsProviderBalance(
+  provider: string,
+  endpoint?: string,
+): boolean {
+  return Boolean(FETCHERS[provider.toLowerCase()] || endpoint);
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export async function fetchProviderBalance(

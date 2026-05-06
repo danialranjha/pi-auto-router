@@ -26,7 +26,7 @@ import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
 import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "./src/display.ts";
-import { fetchAllBalances, buildMonthlyQuotaWindow } from "./src/balance-fetcher.ts";
+import { fetchAllBalances, buildMonthlyQuotaWindow, supportsProviderBalance } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
 import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow, PolicyRuleConfig } from "./src/types.ts";
@@ -178,6 +178,7 @@ async function refreshBalances(): Promise<void> {
 
   const auth = readAuth();
   const providersWithKeys = perToken
+    .filter((p) => supportsProviderBalance(p.provider, p.balanceEndpoint))
     .filter((p) => {
       const authKey = p.authProvider ?? p.provider;
       const entry = auth[authKey];
@@ -212,15 +213,41 @@ async function refreshBalances(): Promise<void> {
   }
 }
 
+let startupUviRefreshInFlight: Promise<void> | null = null;
+
+function triggerStartupUviRefresh(): void {
+  if (startupUviRefreshInFlight) return;
+  startupUviRefreshInFlight = (async () => {
+    try {
+      loadRoutesConfig();
+      await ensureBudgetLoaded();
+      const subscriptionEnabled = quotaCache.isEnabled();
+      const perTokenCount = getPerTokenProviders().length;
+      if (!subscriptionEnabled && perTokenCount === 0) return;
+      if (subscriptionEnabled) await quotaCache.refreshNow();
+      if (perTokenCount > 0) {
+        balanceLastRefreshAt = 0;
+        await refreshBalances();
+      }
+      syncUtilizationIntoBudget();
+      refreshStatus();
+    } catch {
+      // Best-effort warmup only.
+    }
+  })().finally(() => {
+    startupUviRefreshInFlight = null;
+  });
+}
+
 function formatUtilizationLines(cache: QuotaCache): string[] {
   const snapshots = cache.getAllSnapshots();
-  // Merge in per-token UVI from balance cache
+  // Merge in per-token UVI from monthly budget/spend. Balance fetch is optional:
+  // some providers (e.g. Google/Gemini API key) do not expose a supported balance
+  // endpoint/parser, but we can still compute UVI from tracked spend vs budget.
   const now = Date.now();
   const monthlyLimit = budgetTracker.getMonthlyLimits();
   const monthlySpend = budgetTracker.getMonthlySpend();
-  for (const [provider, balance] of balanceCache) {
-    if (balance.error) continue;
-    const limit = monthlyLimit[provider];
+  for (const [provider, limit] of Object.entries(monthlyLimit)) {
     if (!limit || limit <= 0) continue;
     const spend = monthlySpend[provider] ?? 0;
     const window = buildMonthlyQuotaWindow(provider, spend, limit, now);
@@ -345,10 +372,26 @@ function getTargetBilling(target: RouteTarget): BillingModel {
 
 // validateRouteTarget is imported from ./src/display.ts
 
+function getRelevantOAuthProviders(): Array<"openai-codex" | "anthropic" | "google-gemini-cli" | "google-antigravity"> {
+  const providers = new Set<"openai-codex" | "anthropic" | "google-gemini-cli" | "google-antigravity">();
+  for (const route of Object.values(routesCache)) {
+    for (const target of route.targets) {
+      const oauthId = mapRouteProviderToOAuth(target.provider, target.authProvider);
+      if (oauthId) providers.add(oauthId);
+    }
+  }
+  return Array.from(providers);
+}
+
+function syncQuotaProviderFilter(): void {
+  quotaCache.setProviderFilter(getRelevantOAuthProviders());
+}
+
 function loadRoutesConfig(): void {
   routesCache = DEFAULT_ROUTES;
   aliasesCache = DEFAULT_ALIASES;
   configError = undefined;
+  syncQuotaProviderFilter();
 
   if (!existsSync(ROUTES_PATH)) return;
 
@@ -419,11 +462,13 @@ function loadRoutesConfig(): void {
 
     routesCache = Object.keys(nextRoutes).length > 0 ? nextRoutes : DEFAULT_ROUTES;
     aliasesCache = Object.keys(nextAliases).length > 0 ? nextAliases : DEFAULT_ALIASES;
+    syncQuotaProviderFilter();
     rebuildPolicyEngine();
   } catch (error) {
     configError = error instanceof Error ? error.message : String(error);
     routesCache = DEFAULT_ROUTES;
     aliasesCache = DEFAULT_ALIASES;
+    syncQuotaProviderFilter();
     rebuildPolicyEngine();
   }
 }
@@ -1398,6 +1443,7 @@ function rebuildProvider(pi: ExtensionAPI) {
 
 export default function (pi: ExtensionAPI) {
   rebuildProvider(pi);
+  triggerStartupUviRefresh();
 
   const updateUi = (ctx: any) => {
     latestUiContext = ctx;
@@ -1405,7 +1451,10 @@ export default function (pi: ExtensionAPI) {
     refreshStatus();
   };
 
-  pi.on("session_start", async (_event, ctx) => updateUi(ctx));
+  pi.on("session_start", async (_event, ctx) => {
+    updateUi(ctx);
+    triggerStartupUviRefresh();
+  });
   pi.on("model_select", async (_event, ctx) => updateUi(ctx));
   pi.on("agent_start", async (_event, ctx) => updateUi(ctx));
   pi.on("agent_end", async (_event, ctx) => updateUi(ctx));
@@ -1596,6 +1645,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (subcommand === "uvi") {
+        await ensureBudgetLoaded();
         const [actionRaw] = remainder ? remainder.split(/\s+/) : [];
         const action = String(actionRaw ?? "show").toLowerCase();
         if (action === "enable") {
@@ -1631,26 +1681,31 @@ export default function (pi: ExtensionAPI) {
         const subscriptionEnabled = quotaCache.isEnabled();
         const perToken = getPerTokenProviders();
         const perTokenCount = perToken.length;
+        const monthlyLimits = budgetTracker.getMonthlyLimits();
         const statusLabel = subscriptionEnabled
           ? (perTokenCount > 0 ? "enabled (+ per-token)" : "enabled")
           : (perTokenCount > 0 ? "enabled (per-token only)" : "disabled");
         const header = `UVI (${statusLabel}):`;
+        const missingBudgetLines = perToken
+          .filter(({ provider }) => !(monthlyLimits[provider] > 0))
+          .map(({ provider }) => `  ${provider.padEnd(22)} [set monthly budget: /auto-router budget set ${provider} <usd> monthly]`);
         // Collect per-token providers with fetch errors for diagnostics
         const balanceIssueLines: string[] = [];
         for (const [provider, err] of Object.entries(balanceFetchErrors)) {
-          if (!lines.some((l) => l.includes(provider))) {
+          if (!lines.some((l) => l.includes(provider)) && monthlyLimits[provider] > 0) {
             balanceIssueLines.push(`  ${provider.padEnd(22)} [not showing: ${err}]`);
           }
         }
         if (lines.length === 0) {
           const hintParts: string[] = [];
           if (subscriptionEnabled) hintParts.push("No OAuth snapshots yet");
-          if (perTokenCount > 0) hintParts.push("no per-token data");
+          if (perTokenCount > 0 && missingBudgetLines.length === 0) hintParts.push("no per-token data");
           const hint = hintParts.length > 0
             ? `${hintParts.join("; ")}. Try /auto-router uvi refresh.`
             : "Set AUTO_ROUTER_UVI=1 or run /auto-router uvi enable to start polling.";
           const out = [header, `  ${hint}`];
-          if (balanceIssueLines.length > 0) out.push(...balanceIssueLines);
+          if (missingBudgetLines.length > 0) out.push("", "💡 Per-token providers need a monthly budget for UVI:", ...missingBudgetLines);
+          if (balanceIssueLines.length > 0) out.push(...(missingBudgetLines.length > 0 ? [] : [""]), ...balanceIssueLines);
           ctx.ui.notify(out.join("\n"), "info");
           return;
         }
@@ -1658,8 +1713,13 @@ export default function (pi: ExtensionAPI) {
         if (perTokenCount === 0) {
           out.push("", "💡 Per-token providers: none configured. Set a monthly budget to enable:");
           out.push(`     /auto-router budget set <provider> <usd> monthly`);
-        } else if (balanceIssueLines.length > 0) {
-          out.push("", "⚠ per-token providers not showing:", ...balanceIssueLines);
+        } else {
+          if (missingBudgetLines.length > 0) {
+            out.push("", "💡 Per-token providers need a monthly budget for UVI:", ...missingBudgetLines);
+          }
+          if (balanceIssueLines.length > 0) {
+            out.push("", "⚠ per-token providers not showing:", ...balanceIssueLines);
+          }
         }
         out.push("", "Subcommands: show | refresh | enable | disable");
         ctx.ui.notify(out.join("\n"), "info");
@@ -1667,6 +1727,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (subcommand === "balance") {
+        await ensureBudgetLoaded();
         const [actionRaw] = remainder ? remainder.split(/\s+/) : [];
         const action = String(actionRaw ?? "show").toLowerCase();
         if (action === "fetch" || action === "refresh") {
@@ -1688,10 +1749,13 @@ export default function (pi: ExtensionAPI) {
           const limitText = monthlyLimit ? `$${monthlyLimit.toFixed(2)}` : "none";
           const pctText = monthlyLimit ? ` (${Math.round((monthlySpend / monthlyLimit) * 100)}% used)` : "";
           const errText = balanceFetchErrors[provider] ? ` [! ${balanceFetchErrors[provider]}]` : "";
+          const balanceSupported = supportsProviderBalance(provider);
           if (balance && !balance.error) {
             lines.push(`  ${provider.padEnd(22)} balance $${balance.totalBalance.toFixed(2)} ${balance.currency} | topped-up $${balance.toppedUpBalance.toFixed(2)} | budget ${limitText} | spent $${monthlySpend.toFixed(2)}${pctText}`);
           } else if (balance?.error) {
             lines.push(`  ${provider.padEnd(22)} [fetch error: ${balance.error}] | budget ${limitText} | spent $${monthlySpend.toFixed(2)}${pctText}`);
+          } else if (!balanceSupported) {
+            lines.push(`  ${provider.padEnd(22)} [balance fetch unsupported] | budget ${limitText} | spent $${monthlySpend.toFixed(2)}${pctText}`);
           } else {
             lines.push(`  ${provider.padEnd(22)} [not fetched yet${errText}] | budget ${limitText} | spent $${monthlySpend.toFixed(2)}${pctText}`);
           }

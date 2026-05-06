@@ -392,6 +392,31 @@ describe("fetchAllUsages", () => {
     assert.ok(result["openai-codex"]);
     assert.equal(result.anthropic, undefined);
   });
+
+  it("respects providerIds filter", async () => {
+    let codexCalls = 0;
+    let anthropicCalls = 0;
+    const fetchFn: FetchLike = async (url) => {
+      if (url.includes("/wham/usage")) {
+        codexCalls++;
+        return mockResponse({ rate_limit: { primary_window: { used_percent: 10 }, secondary_window: { used_percent: 5 } } });
+      }
+      if (url.includes("/api/oauth/usage")) {
+        anthropicCalls++;
+        return mockResponse({ five_hour: { utilization: 0.3 }, seven_day: { utilization: 0.1 } });
+      }
+      return mockResponse({}, { status: 404, ok: false });
+    };
+    const result = await fetchAllUsages({
+      auth: { "openai-codex": { access: "x" }, anthropic: { access: "y" } },
+      providerIds: ["anthropic"],
+      fetchFn,
+    });
+    assert.equal(codexCalls, 0);
+    assert.equal(anthropicCalls, 1);
+    assert.equal(result["openai-codex"], undefined);
+    assert.ok(result.anthropic);
+  });
 });
 
 describe("usageToWindows", () => {
