@@ -1,5 +1,64 @@
 # Changelog
 
+## Unreleased — Quality Signal Telemetry
+
+**Shipped:** 2026-05-07
+**Tests:** 414 passing across 74 suites
+
+### Added
+- Pi-style append-only router event log at `~/.pi/agent/extensions/auto-router.events.jsonl`
+- `scripts/routing-stats.mjs` for post-hoc routing analysis, modeled after pi session stats scripts
+- `scripts/routing-quality-stats.mjs` for feedback/quality analysis across route, provider, model, intent, subtask, tags, and planned→actual drift
+- Richer decision logging for routing analysis and future policy learning
+- Per-request `requestId` and best-effort `conversationId`
+- SWE subtask-aware routing heuristics for coding prompts:
+  - implementation
+  - debugging
+  - refactor
+  - testing
+  - review
+  - devops
+- Prior-turn quality signals for coding flows:
+  - repair / follow-up detection
+  - observed `testOutcome` / `buildOutcome`
+  - structured validation signals from prior bash tool results
+- Planned-vs-actual target logging:
+  - `plannedProvider`, `plannedModelId`, `plannedTargetLabel`
+  - actual `provider`, `modelId`, `targetLabel`
+- `attempts[]` chain telemetry for each routed request:
+  - attempt index
+  - provider/model
+  - label
+  - outcome (`success`, `retryable_failure`, `terminal_error`)
+  - latency
+  - error message
+- `candidateTrace[]` for the full candidate set, including:
+  - config rank
+  - final rank
+  - UVI bucket (`promoted`, `normal`, `demoted`)
+  - candidate status (`selected`, `eligible`, `constraint_rejected`, `budget_rejected`, `unhealthy`, `cooldown`, `circuit_open`)
+  - machine-readable rejection/ranking reasons
+  - average latency and estimated cost snapshots
+- `reasoningStructured` alongside the existing human-readable `reasoning` string
+- Validation trace extraction for common coding commands (`npm test`, `pytest`, `cargo test`, `tsc`, `npm run build`, etc.)
+- Subtask-aware provider preference hints layered on top of existing route strategy rules
+
+### Changed
+- Coding intent classification now includes optional SWE subtask detection and confidence
+- Router now dual-writes both the legacy decision log and the new event-style router log
+- `/auto-router rate` now attributes feedback to the most recent completed routed request, using the actual route ID and executed target instead of `Map` insertion order + provider-as-route fallback
+- Router applies lightweight subtask-specific provider preferences before final ranking, while still letting explicit strategy rules override them
+- Decision log now records the model/provider that actually executed after failover, not just the initially planned target
+- `RoutingDecision` now carries structured reasoning, follow-up metadata, and validation-trace metadata for downstream analysis
+- Decision logs now include `isFollowUp`, `isRepair`, `previousRequestId`, `testOutcome`, and `buildOutcome` when available
+- Decision log validation remains backward-compatible with older entries while accepting the richer schema
+
+### Why this matters
+- Makes it possible to audit why a model won, not just which model won
+- Adds lightweight quality labels for coding workflows without needing a full self-improvement loop yet
+- Unblocks future work on quality-aware heuristics, replay evaluation, and self-improving routing loops
+- Fixes a major observability gap in chain routing where planned and executed targets could differ
+
 ## 0.2.0 — Policy Engine, Circuit Breaker & Dynamic Budget Reallocation
 
 **Release date:** 2026-04-27
