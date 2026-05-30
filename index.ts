@@ -32,6 +32,7 @@ import { fetchAllBalances, buildMonthlyQuotaWindow, supportsProviderBalance } fr
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
 import { RouterEventLogger } from "./src/router-event-logger.ts";
+import { sanitizeContext } from "./src/context-sanitizer.ts";
 import { detectValidationTrace } from "./src/validation-outcome-detector.ts";
 import { buildSweSubtaskHeuristic } from "./src/swe-subtask-heuristics.ts";
 import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow, PolicyRuleConfig, DecisionAttemptLog, DecisionCandidateTrace, DecisionReasoningTrace } from "./src/types.ts";
@@ -631,48 +632,6 @@ function buildCombinedError(model: Model<Api>, routeId: string, errors: string[]
   };
 }
 
-function sanitizeContext(context: Context): Context {
-  const messages = (context as any)?.messages;
-  if (!Array.isArray(messages)) return context;
-
-  const newMessages = messages.map((msg: any) => {
-    if (!msg) return msg;
-    const newMsg = { ...msg };
-
-    // Handle tool calls in assistant messages
-    if (msg.role === "assistant" && Array.isArray(msg.tool_calls)) {
-      newMsg.tool_calls = msg.tool_calls.map((tc: any) => {
-        const newTc = { ...tc };
-        if (newTc.id === undefined || newTc.id === null || String(newTc.id).trim() === "") {
-          newTc.id = `call_${Math.random().toString(36).substring(2, 11)}`;
-        }
-        return newTc;
-      });
-    }
-
-    // Handle tool results
-    if (msg.role === "tool" || msg.role === "toolResult") {
-      const toolCallId = msg.tool_call_id || msg.toolCallId;
-      if (toolCallId === undefined || toolCallId === null || String(toolCallId).trim() === "") {
-        const generatedId = `call_${Math.random().toString(36).substring(2, 11)}`;
-        if (msg.role === "tool") newMsg.tool_call_id = generatedId;
-        else newMsg.toolCallId = generatedId;
-      }
-      
-      const toolName = msg.name || msg.toolName;
-      // Gemini requires a name for function_response
-      if (toolName === undefined || toolName === null || String(toolName).trim() === "") {
-        if (msg.role === "tool") newMsg.name = "unknown_tool";
-        else newMsg.toolName = "unknown_tool";
-      }
-    }
-
-    return newMsg;
-  });
-
-  return { ...context, messages: newMessages } as Context;
-}
-
 async function tryTarget(
   outer: AssistantMessageEventStream,
   outerModel: Model<Api>,
@@ -714,7 +673,7 @@ async function tryTarget(
     flushed = true;
   };
 
-  const sanitized = sanitizeContext(context);
+  const sanitized = sanitizeContext(context, target.provider);
   const inner = streamSimple(innerModel, sanitized, { ...options, apiKey: token });
   let lastMessage: AssistantMessage | undefined;
 
