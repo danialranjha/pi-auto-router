@@ -103,6 +103,7 @@ async function loadEvents(file, sinceMs, routeId) {
 
 function summarize(events, limit, dailyTop) {
   const sessions = buildSessions(events).sort((a, b) => (b.lastTimestamp ?? 0) - (a.lastTimestamp ?? 0));
+  const driftRows = sessions.filter((s) => s.plannedSpec !== s.actualSpec);
   return {
     window: summarizeWindow(sessions),
     totals: summarizeTotals(sessions),
@@ -111,8 +112,9 @@ function summarize(events, limit, dailyTop) {
     dailyUviMix: summarizeDailyUviMix(sessions, limit),
     latencyDistributionByModel: summarizeBucketDistributionByModel(sessions, limit, 'latencyMs'),
     costDistributionByModel: summarizeBucketDistributionByModel(sessions, limit, 'costUsd'),
-    recentSessions: sessions.slice(0, limit).map(toDisplaySession),
-    driftSessions: sessions.filter((s) => s.plannedSpec !== s.actualSpec).slice(0, limit).map(toDisplaySession),
+    driftOverview: summarizeDriftOverview(driftRows, limit),
+    driftErrorSummary: summarizeDriftErrorSummary(driftRows, limit),
+    driftSessions: driftRows.slice(0, limit).map(toDisplaySession),
   };
 }
 
@@ -138,6 +140,9 @@ function buildSessions(events) {
       outputTokens: null,
       attemptCount: 0,
       selectedUvi: undefined,
+      candidates: [],
+      selectedCandidate: null,
+      attempts: [],
     };
 
     const ts = Date.parse(event.timestamp ?? '');
@@ -154,15 +159,27 @@ function buildSessions(events) {
       row.selectedUvi = normalizeUvi(event.data?.selectedUvi) ?? row.selectedUvi;
     }
 
-    if (event.type === 'routing.candidates' && !row.selectedUvi) {
-      const selected = Array.isArray(event.data?.candidates)
-        ? event.data.candidates.find((candidate) => candidate?.status === 'selected')
-        : undefined;
+    if (event.type === 'routing.candidates') {
+      row.candidates = Array.isArray(event.data?.candidates) ? event.data.candidates : row.candidates;
+      row.selectedCandidate = Array.isArray(event.data?.candidates)
+        ? event.data.candidates.find((candidate) => candidate?.status === 'selected') ?? row.selectedCandidate
+        : row.selectedCandidate;
+      const selected = row.selectedCandidate;
       row.selectedUvi = inferUviFromCandidate(selected) ?? row.selectedUvi;
     }
 
     if (event.type === 'routing.result') {
       row.attemptCount = Math.max(row.attemptCount, Number(event.data?.index) || 0);
+      row.attempts.push({
+        index: Number(event.data?.index) || 0,
+        outcome: event.data?.outcome,
+        provider: event.data?.provider,
+        modelId: event.data?.modelId,
+        latencyMs: numberOrNull(event.data?.latencyMs),
+        ttftMs: numberOrNull(event.data?.ttftMs),
+        costUsd: numberOrNull(event.data?.costUsd),
+        error: event.data?.error,
+      });
       if (event.data?.outcome === 'success') {
         row.actualProvider = event.data?.provider ?? row.actualProvider;
         row.actualModelId = event.data?.modelId ?? row.actualModelId;
@@ -188,13 +205,22 @@ function buildSessions(events) {
     const plannedSpec = `${session.plannedProvider ?? '[unknown]'}/${session.plannedModelId ?? '[unknown]'}`;
     const actualSpec = `${session.actualProvider ?? session.plannedProvider ?? '[unknown]'}/${session.actualModelId ?? session.plannedModelId ?? '[unknown]'}`;
     const inferredOutcome = session.outcome ?? (session.attemptCount > 0 ? 'incomplete' : session.plannedProvider ? 'missing_final' : '[unknown]');
+    const actualCandidate = Array.isArray(session.candidates)
+      ? session.candidates.find((candidate) => candidate?.provider === session.actualProvider && candidate?.modelId === session.actualModelId) ?? null
+      : null;
+    const drift = summarizeDrift(session, plannedSpec, actualSpec, actualCandidate);
     return {
       ...session,
       plannedSpec,
       actualSpec,
+      actualCandidate,
       outcome: inferredOutcome,
       uviStatus: session.selectedUvi?.status ?? 'unknown',
       uviValue: session.selectedUvi?.uvi ?? null,
+      driftType: drift.type,
+      driftCodes: drift.codes,
+      driftSummary: drift.summary,
+      driftError: drift.error,
     };
   });
 }
@@ -220,6 +246,84 @@ function inferStatusFromBucket(bucket) {
   if (bucket === 'demoted') return 'stressed';
   if (bucket === 'normal') return 'ok';
   return null;
+}
+
+function summarizeDrift(session, plannedSpec, actualSpec, actualCandidate) {
+  if (plannedSpec === actualSpec) return { type: 'none', codes: [], summary: '', error: '' };
+
+  const codes = [];
+  const parts = [];
+  const failedPlannedAttempt = Array.isArray(session.attempts)
+    ? session.attempts.find((attempt) => `${attempt.provider ?? '[unknown]'}/${attempt.modelId ?? '[unknown]'}` === plannedSpec && attempt.outcome && attempt.outcome !== 'success')
+    : null;
+  const errorSummary = failedPlannedAttempt ? String(failedPlannedAttempt.error ?? '').split('\n')[0].replace(/\s+/g, ' ').trim() : '';
+
+  if (failedPlannedAttempt) {
+    codes.push('failover_after_error');
+    parts.push(`failover after ${failedPlannedAttempt.outcome}${errorSummary ? `: ${errorSummary.slice(0, 120)}` : ''}`);
+  } else {
+    codes.push('planner_drift');
+    parts.push('actual target differed without planned-target failure');
+  }
+
+  if (actualCandidate?.bucket) {
+    codes.push(`actual_${actualCandidate.bucket}`);
+    parts.push(`actual bucket=${actualCandidate.bucket}`);
+  }
+
+  if (actualCandidate?.finalRank != null && session.selectedCandidate?.finalRank != null && actualCandidate.finalRank !== session.selectedCandidate.finalRank) {
+    codes.push('rank_fallback');
+    parts.push(`rank ${session.selectedCandidate.finalRank}→${actualCandidate.finalRank}`);
+  }
+
+  if (Number.isFinite(actualCandidate?.avgLatencyMs) && Number.isFinite(session.selectedCandidate?.avgLatencyMs) && actualCandidate.avgLatencyMs < session.selectedCandidate.avgLatencyMs) {
+    codes.push('actual_faster');
+    parts.push(`avg latency ${fmt(actualCandidate.avgLatencyMs, 0)}ms vs ${fmt(session.selectedCandidate.avgLatencyMs, 0)}ms`);
+  }
+
+  if (Number.isFinite(actualCandidate?.estimatedCostUsd) && Number.isFinite(session.selectedCandidate?.estimatedCostUsd) && actualCandidate.estimatedCostUsd < session.selectedCandidate.estimatedCostUsd) {
+    codes.push('actual_cheaper');
+    parts.push(`est cost $${fmt(actualCandidate.estimatedCostUsd, 4)} vs $${fmt(session.selectedCandidate.estimatedCostUsd, 4)}`);
+  }
+
+  if (session.selectedCandidate?.bucket && actualCandidate?.bucket && session.selectedCandidate.bucket !== actualCandidate.bucket) {
+    codes.push('bucket_change');
+    parts.push(`bucket ${session.selectedCandidate.bucket}→${actualCandidate.bucket}`);
+  }
+
+  return { type: failedPlannedAttempt ? 'failover' : 'planner', codes, summary: parts.join(' | '), error: errorSummary };
+}
+
+function summarizeDriftOverview(driftRows, limit) {
+  const byCode = new Map();
+  let failover = 0;
+  let planner = 0;
+  for (const row of driftRows) {
+    if (row.driftType === 'failover') failover += 1;
+    else if (row.driftType === 'planner') planner += 1;
+    for (const code of row.driftCodes ?? []) byCode.set(code, (byCode.get(code) ?? 0) + 1);
+  }
+  return {
+    total: driftRows.length,
+    failover,
+    planner,
+    codes: [...byCode.entries()]
+      .map(([key, count]) => ({ key, count, sharePct: percent(count, Math.max(1, driftRows.length)), bar: bar(percent(count, Math.max(1, driftRows.length)), 12) }))
+      .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+      .slice(0, limit),
+  };
+}
+
+function summarizeDriftErrorSummary(driftRows, limit) {
+  const byError = new Map();
+  for (const row of driftRows) {
+    if (!row.driftError) continue;
+    byError.set(row.driftError, (byError.get(row.driftError) ?? 0) + 1);
+  }
+  return [...byError.entries()]
+    .map(([error, count]) => ({ error, count, sharePct: percent(count, Math.max(1, driftRows.length)) }))
+    .sort((a, b) => b.count - a.count || a.error.localeCompare(b.error))
+    .slice(0, limit);
 }
 
 function summarizeWindow(sessions) {
@@ -524,6 +628,10 @@ function toDisplaySession(session) {
     latencyMs: session.latencyMs,
     ttftMs: session.ttftMs,
     costUsd: session.costUsd,
+    driftType: session.driftType,
+    driftCodes: session.driftCodes,
+    driftSummary: session.driftSummary,
+    driftError: session.driftError,
   };
 }
 
@@ -584,12 +692,12 @@ function buildTimelineAxisTicks(width) {
 
 function buildText(summary, file) {
   const lines = [];
+  const windowLabel = `${formatLocalTimestamp(summary.window.startMs) ?? '[unknown]'} → ${formatLocalTimestamp(summary.window.endMs) ?? '[unknown]'} (local)`;
   lines.push(`Routing session stats from ${file}`);
-  lines.push(`Window: ${formatLocalTimestamp(summary.window.startMs) ?? '[unknown]'} → ${formatLocalTimestamp(summary.window.endMs) ?? '[unknown]'} (local)`);
-  lines.push(`Sessions in window: ${summary.totals.sessions} success=${fmt(summary.totals.successRate)}% failover=${fmt(summary.totals.failoverRate)}% latency=${fmt(summary.totals.avgLatencyMs, 0)}ms ttft=${fmt(summary.totals.avgTtftMs, 0)}ms cost=$${fmt(summary.totals.avgCostUsd, 4)}`);
+  lines.push(`Sessions: ${summary.totals.sessions} success=${fmt(summary.totals.successRate)}% failover=${fmt(summary.totals.failoverRate)}% latency=${fmt(summary.totals.avgLatencyMs, 0)}ms ttft=${fmt(summary.totals.avgTtftMs, 0)}ms cost=$${fmt(summary.totals.avgCostUsd, 4)}`);
   lines.push('');
 
-  lines.push('Daily routing composition');
+  lines.push(`Daily routing composition (window: ${windowLabel})`);
   for (const day of summary.dailyRoutingComposition) {
     const labels = day.segments.map((row) => `${row.shade} ${row.key} ${fmt(row.sharePct)}%`).join(' | ');
     lines.push(`  ${day.key}  total=${String(day.total).padStart(3)}  ${day.bar}  ${labels}`);
@@ -610,27 +718,41 @@ function buildText(summary, file) {
   }
   lines.push('');
 
-  lines.push('UVI selection mix by day');
+  lines.push(`UVI selection mix by day (window: ${windowLabel})`);
   for (const row of summary.dailyUviMix) lines.push(`  ${row.key}  total=${String(row.total).padStart(3)}  ${row.bar}  ${row.labels.padEnd(30)} success=${fmt(row.successRate)}% latency=${fmt(row.avgLatencyMs, 0)}ms`);
   lines.push('');
 
-  lines.push('Latency distribution by model (window above)');
+  lines.push(`Latency distribution by model (window: ${windowLabel})`);
   for (const row of summary.latencyDistributionByModel) {
     lines.push(`  ${row.key}  p50=${fmt(row.p50, 0)}ms n=${row.count}`);
     for (const bucket of row.buckets) lines.push(`    ${bucket.label.padEnd(8)} ${bucket.bar.padEnd(12)} ${bucket.count}`);
   }
   lines.push('');
 
-  lines.push('Cost distribution by model (window above)');
+  lines.push(`Cost distribution by model (window: ${windowLabel})`);
   for (const row of summary.costDistributionByModel) {
     lines.push(`  ${row.key}  p50=$${fmt(row.p50, 4)} n=${row.count}`);
     for (const bucket of row.buckets) lines.push(`    ${bucket.label.padEnd(8)} ${bucket.bar.padEnd(12)} ${bucket.count}`);
   }
   lines.push('');
 
-  lines.push('Planned → actual drift');
+  lines.push(`Drift overview (window: ${windowLabel})`);
+  if (summary.driftOverview.total === 0) {
+    lines.push('  none');
+  } else {
+    lines.push(`  total=${summary.driftOverview.total} failover=${summary.driftOverview.failover} planner=${summary.driftOverview.planner}`);
+    for (const row of summary.driftOverview.codes) lines.push(`  ${row.key.padEnd(22)} n=${String(row.count).padStart(3)} share=${fmt(row.sharePct)}% ${row.bar}`);
+  }
+  lines.push('');
+
+  lines.push(`Top drift-triggering errors (window: ${windowLabel})`);
+  if (summary.driftErrorSummary.length === 0) lines.push('  none');
+  for (const row of summary.driftErrorSummary) lines.push(`  n=${String(row.count).padStart(3)} share=${fmt(row.sharePct)}% error=${row.error.slice(0, 180)}`);
+  lines.push('');
+
+  lines.push(`Planned → actual drift (window: ${windowLabel})`);
   if (summary.driftSessions.length === 0) lines.push('  none');
-  for (const row of summary.driftSessions) lines.push(`  ${row.timestamp ?? '-'} planned=${row.planned} actual=${row.actual} uvi=${row.uviStatus} outcome=${row.outcome} req=${shortId(row.requestId)}`);
+  for (const row of summary.driftSessions) lines.push(`  ${row.timestamp ?? '-'} type=${row.driftType} planned=${row.planned} actual=${row.actual} uvi=${row.uviStatus} outcome=${row.outcome} codes=${(row.driftCodes ?? []).join(',') || 'none'} reason=${row.driftSummary || '-'} req=${shortId(row.requestId)}`);
 
   return lines.join('\n');
 }
