@@ -213,6 +213,110 @@ For Gemini API-key routes, use your installed Gemini provider id (examples here 
 /auto-router reload
 ```
 
+## Troubleshooting with routing analytics scripts
+
+The router also writes an append-only event log at:
+
+```text
+~/.pi/agent/extensions/auto-router.events.jsonl
+```
+
+You can inspect that log with three repo scripts:
+
+- `node scripts/routing-stats.mjs` — top-level routing/event counters
+- `node scripts/routing-quality-stats.mjs` — feedback and quality breakdowns
+- `node scripts/routing-session-stats.mjs` — per-session routing behavior, UVI progression, failover drift, latency, and cost
+
+### `routing-session-stats.mjs`
+
+Use this when you want to answer questions like:
+
+- Is UVI actually changing provider selection?
+- Which providers/models are dominating by day?
+- Are failovers planner-driven or error-driven?
+- What recurring provider errors are being masked by failover?
+- Which model is faster or cheaper over the current window?
+
+Basic usage:
+
+```bash
+node scripts/routing-session-stats.mjs
+```
+
+Useful filters:
+
+```bash
+# Last 14 section rows, top 5 models/providers per daily chart
+node scripts/routing-session-stats.mjs --limit 14 --daily-top 5
+
+# Only one route
+node scripts/routing-session-stats.mjs --route subscription-swe
+
+# Only recent activity
+node scripts/routing-session-stats.mjs --since 2026-05-28T00:00:00
+
+# JSON for further scripting
+node scripts/routing-session-stats.mjs --json
+```
+
+What the report shows:
+
+- `Daily routing composition` — actual provider/model mix by day
+- `Session-start UVI timeline` — latest local day’s UVI state over time, grouped by actual model
+- `UVI selection mix by day` — how much of each day ran under `ok` vs `surplus` vs other UVI states
+- `Latency distribution by model` — how often each model landed in latency buckets (`0-2s`, `2-5s`, …)
+- `Cost distribution by model` — how often each model landed in cost buckets
+- `Drift overview` — counts planner drift vs failover drift and the dominant drift codes
+- `Top drift-triggering errors` — recurring upstream errors that caused failover
+- `Planned → actual drift` — concrete routed requests where the final model differed from the planner’s first choice
+
+Sample output (real troubleshooting use case):
+
+```text
+Routing session stats from /Users/danial/.pi/agent/extensions/auto-router.events.jsonl
+Sessions: 1349 success=99.0% failover=1.9% latency=8500ms ttft=4658ms cost=$0.0422
+
+Daily routing composition (window: 2026-05-08T12:47:59 → 2026-05-29T22:20:10 (local))
+  2026-05-29  total=161  ███████████████████▓  █ openai-codex/gpt-5.4 92.5% | ▓ deepseek/deepseek-v4-flash 7.5%
+              providers=2 models=2 success=98.1% latency=8573ms
+  2026-05-28  total=100  ██████████████████▓▓  █ deepseek/deepseek-v4-flash 89.0% | ▓ openai-codex/gpt-5.4 11.0%
+              providers=2 models=2 success=98.0% latency=5073ms
+
+Session-start UVI timeline (latest local day: 2026-05-29)
+  00h         04h         08h         12h         16h         20h      24h
+  ┼───────────┼───────────┼───────────┼───────────┼───────────┼──────────┼
+                                      ▓▓▓▓                    ▓▓    ▓▓      openai-codex/gpt-5.4 n=149 12:07-22:20
+                                 ▓    ▓ ▓▓                    ▓             deepseek/deepseek-v4-flash n=12 10:24-20:16
+  legend: █ ok  ▓ surplus  ▒ stressed  ░ critical  ▁ unknown
+
+Drift overview (window: 2026-05-08T12:47:59 → 2026-05-29T22:20:10 (local))
+  total=26 failover=26 planner=0
+  actual_cheaper         n= 26 share=100.0% ████████████
+  actual_promoted        n= 26 share=100.0% ████████████
+  failover_after_error   n= 26 share=100.0% ████████████
+  rank_fallback          n= 26 share=100.0% ████████████
+
+Top drift-triggering errors (window: 2026-05-08T12:47:59 → 2026-05-29T22:20:10 (local))
+  n= 22 share=84.6% error=L3: GPT-5.4 (Alternative SOTA): Codex error: {"type":"error","error":{"type":"invalid_request_error","message":"Duplicate item found with id msg_3..."
+```
+
+How to use it to troubleshoot:
+
+1. Start with `Daily routing composition` to see which model/provider actually got traffic.
+2. Check `Session-start UVI timeline` and `UVI selection mix by day` to see whether UVI state coincides with routing shifts.
+3. If `Planned → actual drift` is non-empty, inspect `Drift overview` first:
+   - `planner > 0` suggests routing logic itself is choosing alternates
+   - `failover > 0` suggests runtime/provider errors are forcing the switch
+4. Use `Top drift-triggering errors` to find the dominant upstream/provider failure signature.
+5. Compare `Latency distribution by model` and `Cost distribution by model` to decide whether a fallback provider is merely surviving errors or is also a better latency/cost target.
+
+In practice, this script is best for debugging questions like:
+
+- “Why did OpenAI end up on DeepSeek?”
+- “Is UVI promotion actually changing traffic share?”
+- “Are we masking a provider bug with failover?”
+- “Should a fallback become a primary candidate?”
+
 ## `@` shortcuts
 
 Prefix any prompt with one of these tokens to bias routing toward a specific tier. The shortcut is parsed off the front of the prompt (so the model never sees it) and translated into capability requirements before constraint solving:
