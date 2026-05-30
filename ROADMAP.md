@@ -4,6 +4,51 @@ This document outlines potential future features and improvements for `pi-auto-r
 
 ---
 
+## Near-Term Priorities
+
+### P0 — Observability foundations (shipped)
+- [x] Fix decision log to record actual executed model/provider
+- [x] Log candidate list + rejection/ranking reasons
+- [x] Add request/conversation IDs
+- [x] Replace freeform-only reasoning with structured fields
+
+### P1 — Needed to learn quality
+1. [x] Log actual tokens / cost / TTFT / total latency
+2. [x] Add user feedback tags
+3. [x] Add repair / follow-up detection
+4. [x] Add test / build outcome hooks for coding tasks
+
+**Goal:** capture quality signals, not just successful completion.
+
+### Next up
+- Build richer event-derived analysis scripts (planned→actual drift views, failover heatmaps)
+- Refine SWE subtask heuristics with empirical quality priors
+- Fix package publish contents to include `src/**`
+- Add conversation-scoped feedback targeting (e.g. rate last decision in current thread)
+
+### P2 — Better heuristics
+5. [x] Split code into SWE subtask types
+6. Add complexity / high-stakes scoring
+7. Reduce cheap-model bias for hard SWE and remote ops
+8. Use empirical quality priors per task bucket
+
+**Goal:** improve model-task fit before introducing automated policy learning.
+
+### P3 — Self-improving system
+9. Build offline replay evaluator
+10. Add shadow challenger policy
+11. Auto-generate policy recommendations from logs
+12. Periodically review and promote only proven changes
+
+**Goal:** evolve routing from handcrafted heuristics toward evidence-backed policies.
+
+### Suggested execution order
+- First: finish telemetry and quality labeling (P1)
+- Then: ship heuristic improvements with better task segmentation (P2)
+- Finally: add offline evaluation and champion/challenger loops (P3)
+
+---
+
 ## 1. Feedback-Driven Policy Rules
 
 Wire the existing `FeedbackTracker` (user ratings via `/auto-router rate`) into the `PolicyEngine` as a condition source.
