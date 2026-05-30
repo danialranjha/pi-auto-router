@@ -1,4 +1,4 @@
-import type { Message } from "./types.ts";
+import type { CodeSubtask, Message } from "./types.ts";
 
 export type IntentCategory = "code" | "creative" | "analysis" | "general";
 
@@ -6,6 +6,9 @@ export type IntentResult = {
   category: IntentCategory;
   confidence: number; // 0–1
   reasons: string[];
+  subtask?: CodeSubtask;
+  subtaskConfidence?: number;
+  subtaskReasons?: string[];
 };
 
 /**
@@ -94,6 +97,33 @@ const ANALYSIS_PATTERNS: RegExp[] = [
 /**
  * Classify user intent from prompt text and optional history.
  */
+const SUBTASK_SIGNALS: Array<{ subtask: CodeSubtask; keywords: string[]; patterns?: RegExp[] }> = [
+  {
+    subtask: "debugging",
+    keywords: ["debug", "bug", "error", "exception", "stack trace", "failing", "broken", "not working", "fix", "root cause"],
+  },
+  {
+    subtask: "refactor",
+    keywords: ["refactor", "clean up", "cleanup", "restructure", "rename", "extract", "simplify", "modernize", "migrate"],
+  },
+  {
+    subtask: "testing",
+    keywords: ["unit test", "integration test", "test case", "spec", "coverage", "assert", "mock", "fixture", "flaky test"],
+  },
+  {
+    subtask: "review",
+    keywords: ["code review", "review this pr", "review this code", "audit this code", "inspect this patch", "suggest improvements"],
+  },
+  {
+    subtask: "devops",
+    keywords: ["deploy", "docker", "kubernetes", "k8s", "terraform", "helm", "github actions", "ci/cd", "pipeline", "infra", "infrastructure"],
+  },
+  {
+    subtask: "implementation",
+    keywords: ["implement", "build", "create", "add", "write", "generate", "scaffold", "feature", "endpoint", "handler"],
+  },
+];
+
 export function classifyIntent(prompt: string, history?: Message[]): IntentResult {
   const text = buildClassificationText(prompt, history);
   
@@ -134,10 +164,52 @@ export function classifyIntent(prompt: string, history?: Message[]): IntentResul
   if (scores[0][1] >= MIN_SCORE) {
     const total = scores.reduce((sum, [, s]) => sum + s, 0);
     const confidence = Math.min(1, total > 0 ? scores[0][1] / (total * 0.7) : 0);
-    return { category: scores[0][0], confidence, reasons };
+    const result: IntentResult = { category: scores[0][0], confidence, reasons };
+    if (result.category === "code") {
+      const subtask = classifyCodeSubtask(text);
+      if (subtask) {
+        result.subtask = subtask.subtask;
+        result.subtaskConfidence = subtask.confidence;
+        result.subtaskReasons = subtask.reasons;
+      }
+    }
+    return result;
   }
 
   return { category: "general", confidence: 0.3, reasons: ["no strong signal"] };
+}
+
+export function classifyCodeSubtask(text: string): { subtask: CodeSubtask; confidence: number; reasons: string[] } | null {
+  const lower = text.toLowerCase();
+  const scored = SUBTASK_SIGNALS
+    .map(({ subtask, keywords, patterns }) => {
+      let score = 0;
+      const reasons: string[] = [];
+      for (const keyword of keywords) {
+        if (lower.includes(keyword)) {
+          score += 1;
+          reasons.push(keyword);
+        }
+      }
+      for (const pattern of patterns ?? []) {
+        if (pattern.test(text)) {
+          score += 1;
+          reasons.push(String(pattern));
+        }
+      }
+      return { subtask, score, reasons };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length === 0) return null;
+  const top = scored[0]!;
+  const total = scored.reduce((sum, entry) => sum + entry.score, 0);
+  return {
+    subtask: top.subtask,
+    confidence: Math.min(1, top.score / Math.max(1, total * 0.7)),
+    reasons: top.reasons,
+  };
 }
 
 function buildClassificationText(prompt: string, history?: Message[]): string {

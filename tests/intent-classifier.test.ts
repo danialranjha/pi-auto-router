@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { classifyIntent, intentToTier } from "../src/intent-classifier.ts";
+import { classifyCodeSubtask, classifyIntent, intentToTier } from "../src/intent-classifier.ts";
 import type { Message } from "../src/types.ts";
 
 describe("classifyIntent", () => {
@@ -23,11 +23,30 @@ describe("classifyIntent", () => {
   it("classifies debugging as code", () => {
     const r = classifyIntent("debug why this TypeScript code throws an error");
     assert.equal(r.category, "code");
+    assert.equal(r.subtask, "debugging");
   });
 
   it("classifies git operations as code", () => {
     const r = classifyIntent("git commit the changes and push to main");
     assert.equal(r.category, "code");
+  });
+
+  it("detects implementation-oriented coding tasks", () => {
+    const r = classifyIntent("implement a new REST endpoint and add the handler");
+    assert.equal(r.category, "code");
+    assert.equal(r.subtask, "implementation");
+  });
+
+  it("detects refactor-oriented coding tasks", () => {
+    const r = classifyIntent("refactor this module to extract smaller functions");
+    assert.equal(r.category, "code");
+    assert.equal(r.subtask, "refactor");
+  });
+
+  it("detects testing-oriented coding tasks", () => {
+    const r = classifyIntent("add unit tests and improve coverage for this service");
+    assert.equal(r.category, "code");
+    assert.equal(r.subtask, "testing");
   });
 
   it("classifies creative writing as creative", () => {
@@ -89,6 +108,17 @@ describe("classifyIntent", () => {
     const r = classifyIntent("implement a sorting function and analyze its performance");
     assert.ok(r.reasons.length > 0);
     assert.ok(r.reasons.some((s) => s.includes("code")));
+  });
+});
+
+describe("classifyCodeSubtask", () => {
+  it("returns debugging for stack-trace style prompts", () => {
+    const r = classifyCodeSubtask("fix this failing test and debug the stack trace");
+    assert.equal(r?.subtask, "debugging");
+  });
+
+  it("returns null when there is no strong subtask signal", () => {
+    assert.equal(classifyCodeSubtask("hello there"), null);
   });
 });
 

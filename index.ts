@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   createAssistantMessageEventStream,
   getModel,
@@ -23,13 +24,17 @@ import { getProviderHealthCache } from "./src/health-check.ts";
 import { LatencyTracker } from "./src/latency-tracker.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
-import { PolicyEngine, buildStrategyRules, type StrategyRule } from "./src/policy-engine.ts";
+import { buildRatingFromCompletedDecision, getMostRecentCompletedDecision, rememberCompletedDecision, type CompletedDecisionFeedbackContext } from "./src/rating-attribution.ts";
+import { PolicyEngine, buildStrategyRules, mergeHints, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
 import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "./src/display.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow, supportsProviderBalance } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
-import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow, PolicyRuleConfig } from "./src/types.ts";
+import { RouterEventLogger } from "./src/router-event-logger.ts";
+import { detectValidationTrace } from "./src/validation-outcome-detector.ts";
+import { buildSweSubtaskHeuristic } from "./src/swe-subtask-heuristics.ts";
+import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow, PolicyRuleConfig, DecisionAttemptLog, DecisionCandidateTrace, DecisionReasoningTrace } from "./src/types.ts";
 
 const PROVIDER_ID = "auto-router";
 const AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
@@ -80,6 +85,7 @@ const feedbackTracker = new FeedbackTracker();
 const policyEngine = new PolicyEngine();
 const circuitBreaker = new CircuitBreaker();
 const decisionLogger = new DecisionLogger();
+const routerEventLogger = new RouterEventLogger();
 const balanceCache = new Map<string, BalanceState>();
 let balanceLastRefreshAt = 0;
 let balanceFetchErrors: Record<string, string> = {};
@@ -98,6 +104,9 @@ const uviHardMode = (() => {
 
 let budgetReady = false;
 let latestUiContext: any;
+const conversationIds = new WeakMap<object, string>();
+const lastDecisionByConversation = new Map<string, { requestId: string; routeId: string; provider: string; modelId: string; timestamp: number }>();
+let recentCompletedDecisions: CompletedDecisionFeedbackContext[] = [];
 
 function envShadowEnabled(): boolean {
   const raw = process.env.AUTO_ROUTER_SHADOW;
@@ -670,7 +679,7 @@ async function tryTarget(
   target: RouteTarget,
   context: Context,
   options?: SimpleStreamOptions,
-): Promise<{ success: boolean; retryableFailure?: string; terminalError?: AssistantMessage; lastMessage?: AssistantMessage }> {
+): Promise<{ success: boolean; retryableFailure?: string; terminalError?: AssistantMessage; lastMessage?: AssistantMessage; ttftMs?: number }> {
   activeTargetByRoute.set(outerModel.id, describeTarget(target));
   refreshStatus(outerModel.id);
   let token = target.authProvider ? getAccessToken(target.authProvider) : undefined;
@@ -695,6 +704,8 @@ async function tryTarget(
   let flushed = false;
   let sawSubstantive = false;
   let thinkingCount = 0;
+  const startedAt = Date.now();
+  let ttftMs: number | undefined;
 
   const flush = () => {
     if (flushed) return;
@@ -719,6 +730,7 @@ async function tryTarget(
 
       if (isRealContent) {
         sawSubstantive = true;
+        if (ttftMs === undefined) ttftMs = Date.now() - startedAt;
       } else if (event.type === "thinking_delta") {
         thinkingCount++;
         if (thinkingCount > 10) sawSubstantive = true;
@@ -731,7 +743,7 @@ async function tryTarget(
         const message = event.error?.errorMessage || `${target.label || "Target"}: unknown error`;
         if (!sawSubstantive && isRetryableError(message)) {
           putOnCooldown(target, message, outerModel.id);
-          return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
+          return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, ttftMs };
         }
         flush();
         outer.push({
@@ -745,6 +757,7 @@ async function tryTarget(
         });
         return {
           success: false,
+          ttftMs,
           terminalError: {
             ...(event.error || {}),
             provider: outerModel.provider,
@@ -765,7 +778,7 @@ async function tryTarget(
     const message = error instanceof Error ? error.message : String(error);
     if (!sawSubstantive && isRetryableError(message)) {
       putOnCooldown(target, message, outerModel.id);
-      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
+      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, ttftMs };
     }
     throw error;
   }
@@ -776,10 +789,11 @@ async function tryTarget(
     const message = lastMessage.errorMessage || "Unknown terminal error";
     if (!sawSubstantive && isRetryableError(message)) {
       putOnCooldown(target, message, outerModel.id);
-      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
+      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, ttftMs };
     }
     return {
       success: false,
+      ttftMs,
       terminalError: {
         ...lastMessage,
         provider: outerModel.provider,
@@ -789,7 +803,7 @@ async function tryTarget(
     };
   }
 
-  return { success: true, lastMessage };
+  return { success: true, lastMessage, ttftMs };
 }
 
 function extractLastUserText(context: Context): { text: string; index: number; partIndex: number | null } | null {
@@ -841,6 +855,111 @@ function getRoutingMessages(context: Context, excludeIndex: number): RoutingMess
   return out;
 }
 
+function getRequestIdentifiers(context: Context): { requestId: string; conversationId: string } {
+  const requestId = randomUUID();
+  const messages = (context as any)?.messages;
+  if (Array.isArray(messages)) {
+    const key = messages as unknown as object;
+    let conversationId = conversationIds.get(key);
+    if (!conversationId) {
+      conversationId = randomUUID();
+      conversationIds.set(key, conversationId);
+    }
+    return { requestId, conversationId };
+  }
+  return { requestId, conversationId: randomUUID() };
+}
+
+function buildCandidateTrace(
+  routeTargets: RouteTarget[],
+  routeId: string,
+  context: Context,
+  estimatedTokens: number,
+  healthCache: ReturnType<typeof getProviderHealthCache>,
+  healthyTargets: RouteTarget[],
+  solvedCandidates: RouteTarget[],
+  solvedRejections: Array<{ target: RouteTarget; reason: string }>,
+  partition: ReturnType<typeof partitionAuditedCandidates>,
+  finalTargets: RouteTarget[],
+  budgetState?: BudgetState,
+): DecisionCandidateTrace[] {
+  const healthyKeys = new Set(healthyTargets.map((t) => getTargetKey(t)));
+  const solvedKeys = new Set(solvedCandidates.map((t) => getTargetKey(t)));
+  const promotedKeys = new Set(partition.promoted.map((t) => getTargetKey(t)));
+  const normalKeys = new Set(partition.normal.map((t) => getTargetKey(t)));
+  const demotedKeys = new Set(partition.demoted.map((t) => getTargetKey(t)));
+  const finalRanks = new Map(finalTargets.map((t, i) => [getTargetKey(t), i + 1]));
+  const solvedRejectReasons = new Map(solvedRejections.map((r) => [getTargetKey(r.target), r.reason]));
+  const budgetRejectKeys = new Set<string>();
+  const budgetRejectReasons = new Map<string, string>();
+  for (const msg of partition.rejections) {
+    const [label, ...rest] = msg.split(": ");
+    const reason = rest.join(": ").trim() || msg;
+    const target = routeTargets.find((t) => t.label === label);
+    if (!target) continue;
+    const key = getTargetKey(target);
+    budgetRejectKeys.add(key);
+    budgetRejectReasons.set(key, reason);
+  }
+
+  return routeTargets.map((target, i) => {
+    const key = getTargetKey(target);
+    const reasons: string[] = [];
+    let status: DecisionCandidateTrace["status"] = "eligible";
+    let bucket: DecisionCandidateTrace["bucket"] | undefined;
+    if (!healthyKeys.has(key)) {
+      const cooldown = cooldowns.get(getTargetKey(target, routeId));
+      if (cooldown && cooldown.until > Date.now()) {
+        status = "cooldown";
+        reasons.push(cooldown.reason);
+      } else if (circuitBreaker.isOpen(target.provider)) {
+        status = "circuit_open";
+        reasons.push("circuit breaker open");
+      } else if (!healthCache.isHealthy(target.provider, target.authProvider)) {
+        status = "unhealthy";
+        const err = healthCache.getHealthError(target.provider, target.authProvider);
+        if (err) reasons.push(err);
+      } else {
+        status = "unhealthy";
+        reasons.push("not eligible in current health pass");
+      }
+    } else if (solvedRejectReasons.has(key)) {
+      status = "constraint_rejected";
+      reasons.push(solvedRejectReasons.get(key)!);
+    } else if (budgetRejectKeys.has(key)) {
+      status = "budget_rejected";
+      reasons.push(budgetRejectReasons.get(key)!);
+    } else {
+      if (promotedKeys.has(key)) bucket = "promoted";
+      else if (normalKeys.has(key)) bucket = "normal";
+      else if (demotedKeys.has(key)) bucket = "demoted";
+      if (finalRanks.has(key)) {
+        status = finalRanks.get(key) === 1 ? "selected" : "eligible";
+        reasons.push(`final rank ${finalRanks.get(key)}`);
+      } else if (solvedKeys.has(key)) {
+        reasons.push("eligible after constraints");
+      }
+      if (bucket) reasons.push(`bucket ${bucket}`);
+    }
+    const util = budgetState?.utilization?.[target.provider];
+    return {
+      provider: target.provider,
+      modelId: target.modelId,
+      label: target.label,
+      billing: getTargetBilling(target),
+      configRank: i + 1,
+      finalRank: finalRanks.get(key),
+      bucket,
+      status,
+      reasons,
+      avgLatencyMs: latencyTracker.getAvgLatency(target.provider),
+      estimatedCostUsd: estimateModelCost(target, context, estimatedTokens),
+      uvi: typeof util?.uvi === "number" ? util.uvi : null,
+      uviStatus: util?.status,
+    };
+  });
+}
+
 function lookupCapabilities(target: RouteTarget, context: Context): CapabilityMap | undefined {
   const model = resolveModelFromRegistry(target, context);
   if (!model) return undefined;
@@ -870,8 +989,114 @@ function estimateModelCost(target: RouteTarget, context: Context, estimatedInput
   return (estimatedInputTokens * cost.inputUsd + estimatedOutputTokens * cost.outputUsd) / 1_000_000;
 }
 
+function extractUsageMetrics(usage: unknown): { inputTokens?: number; outputTokens?: number; costUsd?: number } {
+  const raw = usage && typeof usage === "object" ? usage as Record<string, unknown> : {};
+  const cost = raw.cost && typeof raw.cost === "object" ? raw.cost as Record<string, unknown> : {};
+  const inputTokens = typeof raw.input === "number" ? raw.input : undefined;
+  const outputTokens = typeof raw.output === "number" ? raw.output : undefined;
+  const costUsd = typeof cost.total === "number" ? cost.total : undefined;
+  return { inputTokens, outputTokens, costUsd };
+}
+
+function parseRatingInput(input: string): { rating?: "good" | "bad"; reason?: string; tags: string[] } {
+  const parts = input.trim().split(/\s+/).filter(Boolean);
+  const rating = parts[0] === "good" || parts[0] === "bad" ? parts[0] : undefined;
+  const tags: string[] = [];
+  const reasonParts: string[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i];
+    if (part === "--tags" || part === "-t") {
+      const next = parts[i + 1] ?? "";
+      if (next) {
+        tags.push(...next.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
+        i++;
+      }
+      continue;
+    }
+    reasonParts.push(part);
+  }
+  return { rating, reason: reasonParts.length > 0 ? reasonParts.join(" ") : undefined, tags: [...new Set(tags)] };
+}
+
+function detectFollowUp(promptText: string, previous?: { requestId: string; routeId: string; provider: string; modelId: string; timestamp: number } | null): {
+  isFollowUp: boolean;
+  isRepair: boolean;
+  signals: string[];
+} {
+  const text = String(promptText ?? "").toLowerCase();
+  if (!previous) return { isFollowUp: false, isRepair: false, signals: [] };
+
+  const signals: string[] = [];
+  const genericFollowUp = [
+    "continue",
+    "go on",
+    "next",
+    "also",
+    "now",
+    "can you",
+    "what about",
+    "please",
+  ];
+  const repairSignals: Array<[string, string]> = [
+    ["that didn't work", "explicit failure"],
+    ["didn't work", "failure"],
+    ["doesn't work", "failure"],
+    ["not working", "failure"],
+    ["failed", "failure"],
+    ["failure", "failure"],
+    ["wrong", "incorrectness"],
+    ["incorrect", "incorrectness"],
+    ["fix", "repair request"],
+    ["try again", "retry request"],
+    ["retry", "retry request"],
+    ["error", "error mention"],
+    ["bug", "bug mention"],
+    ["issue", "issue mention"],
+    ["regression", "regression mention"],
+    ["not what i asked", "instruction mismatch"],
+    ["you missed", "missed requirement"],
+    ["still broken", "continued failure"],
+    ["still failing", "continued failure"],
+    ["revert", "revert request"],
+    ["undo", "undo request"],
+  ];
+
+  if (text.length < 400) {
+    for (const marker of genericFollowUp) {
+      if (text.includes(marker)) signals.push(`follow-up:${marker}`);
+    }
+    for (const [needle, label] of repairSignals) {
+      if (text.includes(needle)) signals.push(`repair:${label}`);
+    }
+  }
+
+  const isRepair = signals.some((s) => s.startsWith("repair:"));
+  const isFollowUp = isRepair || signals.some((s) => s.startsWith("follow-up:"));
+  return { isFollowUp, isRepair, signals: [...new Set(signals)] };
+}
+
 function recordDecision(routeId: string, decision: RoutingDecision): void {
   lastDecisionByRoute.set(routeId, decision);
+}
+
+function rememberFeedbackAttributionDecision(decision: CompletedDecisionFeedbackContext): void {
+  recentCompletedDecisions = rememberCompletedDecision(recentCompletedDecisions, decision);
+}
+
+function emitRouterEvent<T extends Record<string, unknown>>(
+  type: string,
+  ids: { requestId: string; conversationId: string; routeId: string },
+  data: T,
+): void {
+  routerEventLogger.log({
+    type,
+    timestamp: new Date().toISOString(),
+    requestId: ids.requestId,
+    conversationId: ids.conversationId,
+    routeId: ids.routeId,
+    version: 1,
+    data,
+  });
 }
 
 function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
@@ -879,7 +1104,19 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 
   (async () => {
     const routeId = model.id;
+    const { requestId, conversationId } = getRequestIdentifiers(context);
     const errors: string[] = [];
+    let decision: RoutingDecision | null = null;
+    let candidateTrace: DecisionCandidateTrace[] = [];
+    let finalOutcome: DecisionLogEntry["outcome"] | null = null;
+    let finalLatencyMs = 0;
+    let finalTtftMs: number | undefined;
+    let finalSelectedTarget = "";
+    let finalActualTarget: RouteTarget | null = null;
+    let finalInputTokens: number | undefined;
+    let finalOutputTokens: number | undefined;
+    let finalCostUsd: number | undefined;
+    const attempts: DecisionAttemptLog[] = [];
     try {
       loadRoutesConfig();
       await ensureBudgetLoaded();
@@ -898,6 +1135,10 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 
       const promptText = match?.cleanedPrompt ?? userMsg?.text ?? "";
       const history = userMsg ? getRoutingMessages(context, userMsg.index) : [];
+      const validationTrace = detectValidationTrace(history);
+      const routeTargets = routesCache[routeId]?.targets ?? [];
+      const previousDecisionForConversation = lastDecisionByConversation.get(conversationId) ?? null;
+      const followUp = detectFollowUp(promptText, previousDecisionForConversation);
       const healthy = getHealthyTargets(routeId);
 
       // Kick off background health checks for all candidate providers.
@@ -924,35 +1165,39 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       let effectiveTierFinal = effectiveTier;
       let filteredHealthy = healthy;
       const strategyHints = policyEngine.evaluateStrategy(ctx);
+      const sweSubtaskHeuristic = buildSweSubtaskHeuristic(intent, validationTrace);
+      const effectiveHints = strategyHints
+        ? mergeHints(sweSubtaskHeuristic?.hints ?? null, strategyHints)
+        : (sweSubtaskHeuristic?.hints ?? null);
       // Store evaluation trace for /auto-router explain
       lastStrategyTraceByRoute.set(routeId, {
         rules: policyEngine.getLastTrace().map((r) => ({ name: r.name, matched: r.matched })),
         hints: strategyHints ? formatHintsHuman(strategyHints) : null,
       });
-      if (strategyHints) {
+      if (effectiveHints) {
         // Apply tier override
-        if (strategyHints.tierOverride) effectiveTierFinal = strategyHints.tierOverride;
+        if (effectiveHints.tierOverride) effectiveTierFinal = effectiveHints.tierOverride;
         // Apply provider exclusions
-        if (strategyHints.excludeProviders && strategyHints.excludeProviders.length > 0) {
-          const excludeSet = new Set(strategyHints.excludeProviders);
+        if (effectiveHints.excludeProviders && effectiveHints.excludeProviders.length > 0) {
+          const excludeSet = new Set(effectiveHints.excludeProviders);
           filteredHealthy = healthy.filter((t) => !excludeSet.has(t.provider));
           // Rebuild ctx with filtered targets so constraint solver sees the reduced set
           ctx.availableTargets = filteredHealthy;
         }
         // Apply billing model enforcement
-        if (strategyHints.enforceBilling) {
-          filteredHealthy = filteredHealthy.filter((t) => getTargetBilling(t) === strategyHints.enforceBilling);
+        if (effectiveHints.enforceBilling) {
+          filteredHealthy = filteredHealthy.filter((t) => getTargetBilling(t) === effectiveHints.enforceBilling);
           ctx.availableTargets = filteredHealthy;
         }
       }
 
       const requirements = inferRequirements(ctx, tierToRequirements(effectiveTierFinal, ctx.estimatedTokens));
       // Merge strategy constraint overrides into requirements
-      if (strategyHints) {
-        if (strategyHints.forceReasoning) requirements.reasoning = true;
-        if (strategyHints.forceVision) requirements.vision = true;
-        if (typeof strategyHints.forceMinContext === "number") {
-          requirements.minContextWindow = Math.max(requirements.minContextWindow ?? 0, strategyHints.forceMinContext);
+      if (effectiveHints) {
+        if (effectiveHints.forceReasoning) requirements.reasoning = true;
+        if (effectiveHints.forceVision) requirements.vision = true;
+        if (typeof effectiveHints.forceMinContext === "number") {
+          requirements.minContextWindow = Math.max(requirements.minContextWindow ?? 0, effectiveHints.forceMinContext);
         }
       }
       const solved = solveConstraints(ctx, {
@@ -998,9 +1243,9 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       partition.demoted.sort(rankedSort);
 
       // === PolicyEngine: apply post-partition hints (prefer/require providers) ===
-      if (strategyHints?.requireProvider) {
+      if (effectiveHints?.requireProvider) {
         // Move the required provider to the front of promoted (or normal if no promoted)
-        const reqProv = strategyHints.requireProvider;
+        const reqProv = effectiveHints.requireProvider;
         const moveToFront = (arr: RouteTarget[]) => {
           const idx = arr.findIndex((t) => t.provider === reqProv);
           if (idx > 0) {
@@ -1017,8 +1262,8 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           partition.normal.unshift(item);
         }
       }
-      if (strategyHints?.preferProviders && strategyHints.preferProviders.length > 0) {
-        const preferSet = new Set(strategyHints.preferProviders);
+      if (effectiveHints?.preferProviders && effectiveHints.preferProviders.length > 0) {
+        const preferSet = new Set(effectiveHints.preferProviders);
         const preferSort = (a: RouteTarget, b: RouteTarget): number => {
           const aPref = preferSet.has(a.provider) ? 0 : 1;
           const bPref = preferSet.has(b.provider) ? 0 : 1;
@@ -1097,7 +1342,23 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 
       const reasoningParts: string[] = [];
       if (match) reasoningParts.push(`shortcut ${match.shortcut} → tier=${match.tier}`);
+      if (followUp.isRepair) reasoningParts.push(`repair follow-up detected (${followUp.signals.join(", ")})`);
+      else if (followUp.isFollowUp) reasoningParts.push(`follow-up detected (${followUp.signals.join(", ")})`);
+      if (validationTrace.testOutcome) {
+        const lastTest = [...validationTrace.signals].reverse().find((signal) => signal.kind === "test");
+        reasoningParts.push(`last test ${validationTrace.testOutcome}${lastTest ? ` (${lastTest.command})` : ""}`);
+      }
+      if (validationTrace.buildOutcome) {
+        const lastBuild = [...validationTrace.signals].reverse().find((signal) => signal.kind === "build");
+        reasoningParts.push(`last build ${validationTrace.buildOutcome}${lastBuild ? ` (${lastBuild.command})` : ""}`);
+      }
       if (intent && intent.category !== "general") reasoningParts.push(`intent ${intent.category} (${(intent.confidence * 100).toFixed(0)}%) → tier=${effectiveTierFinal}`);
+      if (sweSubtaskHeuristic) {
+        const heuristicParts: string[] = [];
+        if (sweSubtaskHeuristic.hints.preferProviders?.length) heuristicParts.push(`prefer=[${sweSubtaskHeuristic.hints.preferProviders.join(",")}]`);
+        if (sweSubtaskHeuristic.hints.requireProvider) heuristicParts.push(`require=${sweSubtaskHeuristic.hints.requireProvider}`);
+        reasoningParts.push(`swe subtask ${sweSubtaskHeuristic.type} (${(sweSubtaskHeuristic.confidence * 100).toFixed(0)}%)${heuristicParts.length > 0 ? ` → ${heuristicParts.join(" ")}` : ""}`);
+      }
       if (strategyHints) {
         const ruleNames = policyEngine.getLastHints()?.ruleName;
         const stratParts: string[] = [];
@@ -1146,33 +1407,153 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       const budgetRemaining = typeof selectedLimit === "number" && selectedLimit > 0
         ? Math.max(0, selectedLimit - selectedSpend)
         : 0;
-      const decision: RoutingDecision = {
+      candidateTrace = buildCandidateTrace(
+        routeTargets,
+        routeId,
+        context,
+        ctx.estimatedTokens,
+        healthCache,
+        healthy,
+        solved.candidates,
+        solved.rejections,
+        partition,
+        targets,
+        budgetState,
+      );
+      const structuredReasoning: DecisionReasoningTrace = {
+        shortcut: match ? { shortcut: match.shortcut, tier: match.tier } : undefined,
+        intent: intent ? {
+          category: intent.category,
+          confidence: intent.confidence,
+          reasons: intent.reasons,
+          subtask: intent.subtask,
+          subtaskConfidence: intent.subtaskConfidence,
+          subtaskReasons: intent.subtaskReasons,
+        } : undefined,
+        followUp: followUp.isFollowUp || followUp.isRepair || previousDecisionForConversation ? {
+          isFollowUp: followUp.isFollowUp,
+          isRepair: followUp.isRepair,
+          signals: followUp.signals,
+          previousRequestId: previousDecisionForConversation?.requestId,
+          previousProvider: previousDecisionForConversation?.provider,
+          previousModelId: previousDecisionForConversation?.modelId,
+          previousRouteId: previousDecisionForConversation?.routeId,
+        } : undefined,
+        validation: validationTrace.signals.length > 0 ? validationTrace : undefined,
+        requestedTier: effectiveTier,
+        effectiveTier: match?.tier ?? effectiveTierFinal ?? "swe",
+        classification: ctx.classification,
+        estimatedTokens: ctx.estimatedTokens,
+        heuristics: sweSubtaskHeuristic ? {
+          sweSubtask: {
+            type: sweSubtaskHeuristic.type,
+            confidence: sweSubtaskHeuristic.confidence,
+            reasons: sweSubtaskHeuristic.reasons,
+            preferProviders: sweSubtaskHeuristic.hints.preferProviders,
+          },
+        } : undefined,
+        strategy: strategyHints ? {
+          ruleName: policyEngine.getLastHints()?.ruleName,
+          tierOverride: strategyHints.tierOverride,
+          requireProvider: strategyHints.requireProvider,
+          preferProviders: strategyHints.preferProviders,
+          excludeProviders: strategyHints.excludeProviders,
+          enforceBilling: strategyHints.enforceBilling,
+          forceReasoning: strategyHints.forceReasoning,
+          forceVision: strategyHints.forceVision,
+          forceMinContext: strategyHints.forceMinContext,
+        } : undefined,
+        fallback: {
+          constraintFallback,
+          budgetFallback,
+        },
+        counts: {
+          totalRouteTargets: routeTargets.length,
+          healthyTargets: healthy.length,
+          solvedCandidates: solved.candidates.length,
+          constraintRejections: solved.rejections.length,
+          budgetRejections: auditedRejections.length,
+        },
+        warnings: {
+          budget: budgetWarnings,
+          uvi: uviNotes,
+        },
+      };
+      const selectedCandidateTrace = candidateTrace.find((candidate) => candidate.status === "selected") ?? candidateTrace[0];
+      decision = {
         tier: match?.tier ?? effectiveTierFinal ?? "swe",
         phase: match ? "shortcut" : "default",
         target: targets[0],
         reasoning: reasoningParts.join(" | "),
+        structured: structuredReasoning,
         metadata: {
           estimatedTokens: ctx.estimatedTokens,
           budgetRemaining,
           confidence: match ? 0.9 : 0.5,
+          requestId,
+          conversationId,
+          candidateTrace,
         },
       };
       recordDecision(routeId, decision);
+      emitRouterEvent("routing.decision", { requestId, conversationId, routeId }, {
+        tier: decision.tier,
+        phase: decision.phase,
+        plannedTarget: {
+          provider: decision.target.provider,
+          modelId: decision.target.modelId,
+          label: decision.target.label,
+        },
+        selectedUvi: selectedCandidateTrace ? {
+          provider: selectedCandidateTrace.provider,
+          modelId: selectedCandidateTrace.modelId,
+          uvi: selectedCandidateTrace.uvi,
+          status: selectedCandidateTrace.uviStatus,
+          bucket: selectedCandidateTrace.bucket,
+        } : undefined,
+        reasoning: decision.reasoning,
+        reasoningStructured: decision.structured,
+        estimatedTokens: decision.metadata.estimatedTokens,
+        budgetRemaining: decision.metadata.budgetRemaining,
+        confidence: decision.metadata.confidence,
+      });
+      emitRouterEvent("routing.candidates", { requestId, conversationId, routeId }, {
+        candidates: decision.metadata.candidateTrace ?? [],
+      });
 
-      // Track outcomes for the decision log
-      let finalOutcome: DecisionLogEntry["outcome"] | null = null;
-      let finalLatencyMs = 0;
-      let finalSelectedTarget = "";
-
-      for (const target of targets) {
+      for (const [attemptIndex, target] of targets.entries()) {
         lastAttemptByRoute.set(routeId, target.label);
+        emitRouterEvent("routing.attempt", { requestId, conversationId, routeId }, {
+          index: attemptIndex + 1,
+          provider: target.provider,
+          modelId: target.modelId,
+          label: target.label,
+        });
         const t0 = Date.now();
         const result = await tryTarget(outer, model, target, context, options);
         if (result.success) {
           const elapsed = Date.now() - t0;
+          const usageMetrics = extractUsageMetrics(result.lastMessage?.usage);
           finalOutcome = "success";
           finalLatencyMs = elapsed;
+          finalTtftMs = result.ttftMs;
           finalSelectedTarget = target.label;
+          finalActualTarget = target;
+          finalInputTokens = usageMetrics.inputTokens;
+          finalOutputTokens = usageMetrics.outputTokens;
+          finalCostUsd = usageMetrics.costUsd;
+          attempts.push({
+            index: attemptIndex + 1,
+            provider: target.provider,
+            modelId: target.modelId,
+            label: target.label,
+            outcome: "success",
+            latencyMs: elapsed,
+            ttftMs: result.ttftMs,
+            inputTokens: usageMetrics.inputTokens,
+            outputTokens: usageMetrics.outputTokens,
+            costUsd: usageMetrics.costUsd,
+          });
           latencyTracker.recordLatency(target.provider, elapsed);
           circuitBreaker.recordSuccess(target.provider);
           try { latencyTracker.save(); } catch { /* ignore */ }
@@ -1191,50 +1572,217 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           // Log the decision with its outcome
           decisionLogger.log({
             timestamp: Date.now(),
+            requestId,
+            conversationId,
             routeId,
             tier: decision.tier,
             phase: decision.phase,
-            provider: decision.target.provider,
-            modelId: decision.target.modelId,
-            targetLabel: decision.target.label,
+            isFollowUp: followUp.isFollowUp,
+            isRepair: followUp.isRepair,
+            previousRequestId: previousDecisionForConversation?.requestId,
+            testOutcome: validationTrace.testOutcome,
+            buildOutcome: validationTrace.buildOutcome,
+            plannedProvider: decision.target.provider,
+            plannedModelId: decision.target.modelId,
+            plannedTargetLabel: decision.target.label,
+            provider: target.provider,
+            modelId: target.modelId,
+            targetLabel: target.label,
             reasoning: decision.reasoning,
+            reasoningStructured: decision.structured,
+            candidateTrace: decision.metadata.candidateTrace,
+            attempts,
             estimatedTokens: decision.metadata.estimatedTokens,
+            inputTokens: finalInputTokens,
+            outputTokens: finalOutputTokens,
+            costUsd: finalCostUsd,
             budgetRemaining: decision.metadata.budgetRemaining,
             confidence: decision.metadata.confidence,
             outcome: finalOutcome,
             latencyMs: finalLatencyMs,
+            ttftMs: finalTtftMs,
             selectedTarget: finalSelectedTarget,
+          });
+          emitRouterEvent("routing.result", { requestId, conversationId, routeId }, {
+            index: attemptIndex + 1,
+            outcome: "success",
+            provider: target.provider,
+            modelId: target.modelId,
+            label: target.label,
+            latencyMs: elapsed,
+            ttftMs: result.ttftMs,
+            inputTokens: finalInputTokens,
+            outputTokens: finalOutputTokens,
+            costUsd: finalCostUsd,
+          });
+          emitRouterEvent("routing.final", { requestId, conversationId, routeId }, {
+            outcome: finalOutcome,
+            selectedTarget: finalSelectedTarget,
+            actualTarget: {
+              provider: target.provider,
+              modelId: target.modelId,
+              label: target.label,
+            },
+            actualUvi: (() => {
+              const candidate = candidateTrace.find((row) => row.provider === target.provider && row.modelId === target.modelId);
+              return candidate ? { provider: candidate.provider, modelId: candidate.modelId, uvi: candidate.uvi, status: candidate.uviStatus, bucket: candidate.bucket } : undefined;
+            })(),
+          });
+          const completedAt = Date.now();
+          lastDecisionByConversation.set(conversationId, {
+            requestId,
+            routeId,
+            provider: target.provider,
+            modelId: target.modelId,
+            timestamp: completedAt,
+          });
+          rememberFeedbackAttributionDecision({
+            timestamp: completedAt,
+            routeId,
+            requestId,
+            conversationId,
+            provider: target.provider,
+            modelId: target.modelId,
+            label: target.label,
+            tier: decision.tier,
+            intent: decision.structured?.intent?.category,
+            outcome: finalOutcome,
           });
           outer.end();
           return;
         }
         if (result.retryableFailure) {
+          const elapsed = Date.now() - t0;
           circuitBreaker.recordFailure(target.provider);
           errors.push(result.retryableFailure);
           finalSelectedTarget = target.label;
+          finalActualTarget = target;
+          attempts.push({
+            index: attemptIndex + 1,
+            provider: target.provider,
+            modelId: target.modelId,
+            label: target.label,
+            outcome: "retryable_failure",
+            latencyMs: elapsed,
+            ttftMs: result.ttftMs,
+            error: result.retryableFailure,
+          });
+          emitRouterEvent("routing.result", { requestId, conversationId, routeId }, {
+            index: attemptIndex + 1,
+            outcome: "retryable_failure",
+            provider: target.provider,
+            modelId: target.modelId,
+            label: target.label,
+            latencyMs: elapsed,
+            ttftMs: result.ttftMs,
+            error: result.retryableFailure,
+          });
           continue;
         }
         if (result.terminalError) {
+          const elapsed = Date.now() - t0;
+          const usageMetrics = extractUsageMetrics(result.terminalError?.usage);
           finalOutcome = "terminal_error";
           finalSelectedTarget = target.label;
+          finalActualTarget = target;
+          finalTtftMs = result.ttftMs;
+          finalInputTokens = usageMetrics.inputTokens;
+          finalOutputTokens = usageMetrics.outputTokens;
+          finalCostUsd = usageMetrics.costUsd;
+          attempts.push({
+            index: attemptIndex + 1,
+            provider: target.provider,
+            modelId: target.modelId,
+            label: target.label,
+            outcome: "terminal_error",
+            latencyMs: elapsed,
+            ttftMs: result.ttftMs,
+            inputTokens: usageMetrics.inputTokens,
+            outputTokens: usageMetrics.outputTokens,
+            costUsd: usageMetrics.costUsd,
+            error: result.terminalError.errorMessage,
+          });
           activeTargetByRoute.delete(routeId);
           refreshStatus(routeId);
           // Log the decision with terminal outcome
           decisionLogger.log({
             timestamp: Date.now(),
+            requestId,
+            conversationId,
             routeId,
             tier: decision.tier,
             phase: decision.phase,
-            provider: decision.target.provider,
-            modelId: decision.target.modelId,
-            targetLabel: decision.target.label,
+            isFollowUp: followUp.isFollowUp,
+            isRepair: followUp.isRepair,
+            previousRequestId: previousDecisionForConversation?.requestId,
+            testOutcome: validationTrace.testOutcome,
+            buildOutcome: validationTrace.buildOutcome,
+            plannedProvider: decision.target.provider,
+            plannedModelId: decision.target.modelId,
+            plannedTargetLabel: decision.target.label,
+            provider: target.provider,
+            modelId: target.modelId,
+            targetLabel: target.label,
             reasoning: decision.reasoning,
+            reasoningStructured: decision.structured,
+            candidateTrace: decision.metadata.candidateTrace,
+            attempts,
             estimatedTokens: decision.metadata.estimatedTokens,
+            inputTokens: finalInputTokens,
+            outputTokens: finalOutputTokens,
+            costUsd: finalCostUsd,
             budgetRemaining: decision.metadata.budgetRemaining,
             confidence: decision.metadata.confidence,
             outcome: finalOutcome,
             latencyMs: 0,
+            ttftMs: finalTtftMs,
             selectedTarget: finalSelectedTarget,
+          });
+          emitRouterEvent("routing.result", { requestId, conversationId, routeId }, {
+            index: attemptIndex + 1,
+            outcome: "terminal_error",
+            provider: target.provider,
+            modelId: target.modelId,
+            label: target.label,
+            latencyMs: elapsed,
+            ttftMs: result.ttftMs,
+            inputTokens: finalInputTokens,
+            outputTokens: finalOutputTokens,
+            costUsd: finalCostUsd,
+            error: result.terminalError.errorMessage,
+          });
+          emitRouterEvent("routing.final", { requestId, conversationId, routeId }, {
+            outcome: finalOutcome,
+            selectedTarget: finalSelectedTarget,
+            actualTarget: {
+              provider: target.provider,
+              modelId: target.modelId,
+              label: target.label,
+            },
+            actualUvi: (() => {
+              const candidate = candidateTrace.find((row) => row.provider === target.provider && row.modelId === target.modelId);
+              return candidate ? { provider: candidate.provider, modelId: candidate.modelId, uvi: candidate.uvi, status: candidate.uviStatus, bucket: candidate.bucket } : undefined;
+            })(),
+          });
+          const completedAt = Date.now();
+          lastDecisionByConversation.set(conversationId, {
+            requestId,
+            routeId,
+            provider: target.provider,
+            modelId: target.modelId,
+            timestamp: completedAt,
+          });
+          rememberFeedbackAttributionDecision({
+            timestamp: completedAt,
+            routeId,
+            requestId,
+            conversationId,
+            provider: target.provider,
+            modelId: target.modelId,
+            label: target.label,
+            tier: decision.tier,
+            intent: decision.structured?.intent?.category,
+            outcome: finalOutcome,
           });
           outer.end();
           return;
@@ -1246,26 +1794,133 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       // Log exhausted outcome
       decisionLogger.log({
         timestamp: Date.now(),
+        requestId,
+        conversationId,
         routeId,
         tier: decision.tier,
         phase: decision.phase,
-        provider: decision.target.provider,
-        modelId: decision.target.modelId,
-        targetLabel: decision.target.label,
+        isFollowUp: followUp.isFollowUp,
+        isRepair: followUp.isRepair,
+        previousRequestId: previousDecisionForConversation?.requestId,
+        testOutcome: validationTrace.testOutcome,
+        buildOutcome: validationTrace.buildOutcome,
+        plannedProvider: decision.target.provider,
+        plannedModelId: decision.target.modelId,
+        plannedTargetLabel: decision.target.label,
+        provider: finalActualTarget?.provider ?? decision.target.provider,
+        modelId: finalActualTarget?.modelId ?? decision.target.modelId,
+        targetLabel: finalActualTarget?.label ?? decision.target.label,
         reasoning: decision.reasoning,
+        reasoningStructured: decision.structured,
+        candidateTrace: decision.metadata.candidateTrace,
+        attempts,
         estimatedTokens: decision.metadata.estimatedTokens,
+        inputTokens: finalInputTokens,
+        outputTokens: finalOutputTokens,
+        costUsd: finalCostUsd,
         budgetRemaining: decision.metadata.budgetRemaining,
         confidence: decision.metadata.confidence,
         outcome: "exhausted",
         latencyMs: 0,
+        ttftMs: finalTtftMs,
         selectedTarget: errors.length ? errors.join(" | ") : "all targets exhausted",
+      });
+      emitRouterEvent("routing.final", { requestId, conversationId, routeId }, {
+        outcome: "exhausted",
+        selectedTarget: errors.length ? errors.join(" | ") : "all targets exhausted",
+        actualTarget: {
+          provider: finalActualTarget?.provider ?? decision.target.provider,
+          modelId: finalActualTarget?.modelId ?? decision.target.modelId,
+          label: finalActualTarget?.label ?? decision.target.label,
+        },
+        actualUvi: (() => {
+          const provider = finalActualTarget?.provider ?? decision.target.provider;
+          const modelId = finalActualTarget?.modelId ?? decision.target.modelId;
+          const candidate = candidateTrace.find((row) => row.provider === provider && row.modelId === modelId);
+          return candidate ? { provider: candidate.provider, modelId: candidate.modelId, uvi: candidate.uvi, status: candidate.uviStatus, bucket: candidate.bucket } : undefined;
+        })(),
+        attempts,
+      });
+      const completedAt = Date.now();
+      lastDecisionByConversation.set(conversationId, {
+        requestId,
+        routeId,
+        provider: finalActualTarget?.provider ?? decision.target.provider,
+        modelId: finalActualTarget?.modelId ?? decision.target.modelId,
+        timestamp: completedAt,
+      });
+      rememberFeedbackAttributionDecision({
+        timestamp: completedAt,
+        routeId,
+        requestId,
+        conversationId,
+        provider: finalActualTarget?.provider ?? decision.target.provider,
+        modelId: finalActualTarget?.modelId ?? decision.target.modelId,
+        label: finalActualTarget?.label ?? decision.target.label,
+        tier: decision.tier,
+        intent: decision.structured?.intent?.category,
+        outcome: "exhausted",
       });
       outer.push({ type: "error", reason: "error", error: buildCombinedError(model, routeId, errors.length ? errors : ["all targets exhausted"]) });
       outer.end();
     } catch (error) {
       activeTargetByRoute.delete(routeId);
       refreshStatus(routeId);
-      outer.push({ type: "error", reason: "error", error: buildCombinedError(model, routeId, [error instanceof Error ? error.message : String(error)]) });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (decision) {
+        finalOutcome = finalOutcome ?? "terminal_error";
+        finalSelectedTarget = finalSelectedTarget || finalActualTarget?.label || decision.target.label;
+        finalActualTarget = finalActualTarget ?? decision.target;
+        decisionLogger.log({
+          timestamp: Date.now(),
+          requestId,
+          conversationId,
+          routeId,
+          tier: decision.tier,
+          phase: decision.phase,
+          isFollowUp: false,
+          isRepair: false,
+          previousRequestId: undefined,
+          testOutcome: undefined,
+          buildOutcome: undefined,
+          plannedProvider: decision.target.provider,
+          plannedModelId: decision.target.modelId,
+          plannedTargetLabel: decision.target.label,
+          provider: finalActualTarget.provider,
+          modelId: finalActualTarget.modelId,
+          targetLabel: finalActualTarget.label,
+          reasoning: decision.reasoning,
+          reasoningStructured: decision.structured,
+          candidateTrace: decision.metadata.candidateTrace,
+          attempts,
+          estimatedTokens: decision.metadata.estimatedTokens,
+          inputTokens: finalInputTokens,
+          outputTokens: finalOutputTokens,
+          costUsd: finalCostUsd,
+          budgetRemaining: decision.metadata.budgetRemaining,
+          confidence: decision.metadata.confidence,
+          outcome: finalOutcome,
+          latencyMs: finalLatencyMs,
+          ttftMs: finalTtftMs,
+          selectedTarget: finalSelectedTarget,
+        });
+        emitRouterEvent("routing.final", { requestId, conversationId, routeId }, {
+          outcome: finalOutcome,
+          selectedTarget: finalSelectedTarget,
+          actualTarget: {
+            provider: finalActualTarget.provider,
+            modelId: finalActualTarget.modelId,
+            label: finalActualTarget.label,
+          },
+          actualUvi: (() => {
+            const candidate = candidateTrace.find((row) => row.provider === finalActualTarget?.provider && row.modelId === finalActualTarget?.modelId);
+            return candidate ? { provider: candidate.provider, modelId: candidate.modelId, uvi: candidate.uvi, status: candidate.uviStatus, bucket: candidate.bucket } : undefined;
+          })(),
+          error: errorMessage,
+          attempts,
+        });
+      }
+      outer.push({ type: "error", reason: "error", error: buildCombinedError(model, routeId, [errorMessage]) });
       outer.end();
     }
   })();
@@ -1559,6 +2214,7 @@ export default function (pi: ExtensionAPI) {
         lastAttemptByRoute.clear();
         activeTargetByRoute.clear();
         lastDecisionByRoute.clear();
+        recentCompletedDecisions = [];
         lastShortcutByRoute.clear();
         lastBudgetWarningByRoute.clear();
         lastShadowByRoute.clear();
@@ -1567,6 +2223,7 @@ export default function (pi: ExtensionAPI) {
         latencyTracker.clear();
         feedbackTracker.clear();
         decisionLogger.clear();
+        routerEventLogger.clear();
         policyEngine.reset();
         circuitBreaker.clear();
         balanceCache.clear();
@@ -1611,36 +2268,45 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (subcommand === "rate") {
-        const [ratingRaw, ...reasonParts] = remainder ? remainder.split(/\s+/) : [];
-        const rating = String(ratingRaw ?? "").toLowerCase();
+        const parsed = parseRatingInput(remainder);
+        const rating = parsed.rating;
         if (rating !== "good" && rating !== "bad") {
-          ctx.ui.notify("Usage: /auto-router rate <good|bad> [reason]", "error");
+          ctx.ui.notify("Usage: /auto-router rate <good|bad> [reason] [--tags tag1,tag2]", "error");
           return;
         }
-        const lastDecision = lastDecisionByRoute.values().next().value as RoutingDecision | undefined;
-        // Find the most recent decision across all routes
-        let recentDecision: RoutingDecision | undefined;
-        for (const d of lastDecisionByRoute.values()) {
-          recentDecision = d; // last inserted wins
-        }
+        const recentDecision = getMostRecentCompletedDecision(recentCompletedDecisions);
         if (!recentDecision) {
           ctx.ui.notify("No routing decision to rate yet. Send a prompt first.", "warning");
           return;
         }
-        const reason = reasonParts.length > 0 ? reasonParts.join(" ") : undefined;
-        feedbackTracker.record({
-          provider: recentDecision.target.provider,
-          modelId: recentDecision.target.modelId,
-          routeId: recentDecision.target.provider, // use provider as route context
-          rating: rating as "good" | "bad",
+        const reason = parsed.reason;
+        const tags = parsed.tags;
+        feedbackTracker.record(buildRatingFromCompletedDecision(recentDecision, {
+          rating,
           reason,
-          tier: recentDecision.tier,
+          tags,
           timestamp: Date.now(),
-        });
+        }));
         try { feedbackTracker.save(); } catch { /* ignore */ }
+        emitRouterEvent("routing.feedback", {
+          requestId: recentDecision.requestId,
+          conversationId: recentDecision.conversationId,
+          routeId: recentDecision.routeId,
+        }, {
+          provider: recentDecision.provider,
+          modelId: recentDecision.modelId,
+          label: recentDecision.label,
+          rating,
+          reason,
+          tags,
+          tier: recentDecision.tier,
+          intent: recentDecision.intent,
+          outcome: recentDecision.outcome,
+        });
         const emoji = rating === "good" ? "👍" : "👎";
         const reasonSuffix = reason ? ` (${reason})` : "";
-        ctx.ui.notify(`${emoji} Rated ${recentDecision.target.label} as ${rating}${reasonSuffix}`, "success");
+        const tagSuffix = tags.length > 0 ? ` [tags: ${tags.join(", ")}]` : "";
+        ctx.ui.notify(`${emoji} Rated ${recentDecision.label} as ${rating}${reasonSuffix}${tagSuffix}`, "success");
         return;
       }
 
@@ -2217,7 +2883,7 @@ export default function (pi: ExtensionAPI) {
         "/auto-router budget [show|set <provider> <usd> [monthly]|clear <provider> [monthly]]",
         "/auto-router uvi [show|enable|disable|refresh]",
         "/auto-router shadow [show|enable|disable]",
-        "/auto-router rate <good|bad> [reason]",
+        "/auto-router rate <good|bad> [reason] [--tags tag1,tag2]",
         "/auto-router decisions [recent|stats|show|export|clear]",
         "/auto-router test-resolve <provider/modelId>",
         "/auto-router debug",

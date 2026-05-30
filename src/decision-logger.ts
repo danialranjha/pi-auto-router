@@ -94,7 +94,8 @@ export class DecisionLogger {
     this.load();
     const stats: Record<string, { attempts: number; successes: number; failures: number; totalLatencyMs: number; lastUsed: number }> = {};
     for (const e of this.entries) {
-      const s = stats[e.provider] ?? { attempts: 0, successes: 0, failures: 0, totalLatencyMs: 0, lastUsed: 0 };
+      const provider = e.provider || e.plannedProvider;
+      const s = stats[provider] ?? { attempts: 0, successes: 0, failures: 0, totalLatencyMs: 0, lastUsed: 0 };
       s.attempts++;
       if (e.outcome === "success") {
         s.successes++;
@@ -103,7 +104,7 @@ export class DecisionLogger {
         s.failures++;
       }
       s.lastUsed = Math.max(s.lastUsed, e.timestamp);
-      stats[e.provider] = s;
+      stats[provider] = s;
     }
     const result: Record<string, { attempts: number; successes: number; failures: number; avgLatencyMs: number; lastUsed: number }> = {};
     for (const [provider, s] of Object.entries(stats)) {
@@ -190,6 +191,11 @@ export function isValidEntry(e: unknown): e is DecisionLogEntry {
     typeof o.tier === "string" &&
     typeof o.phase === "string" &&
     typeof o.provider === "string" &&
+    (o.requestId === undefined || typeof o.requestId === "string") &&
+    (o.conversationId === undefined || typeof o.conversationId === "string") &&
+    (o.isFollowUp === undefined || typeof o.isFollowUp === "boolean") &&
+    (o.isRepair === undefined || typeof o.isRepair === "boolean") &&
+    (o.previousRequestId === undefined || typeof o.previousRequestId === "string") &&
     typeof o.outcome === "string" &&
     ["success", "terminal_error", "exhausted"].includes(o.outcome as string)
   );

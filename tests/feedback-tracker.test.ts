@@ -45,11 +45,12 @@ describe("FeedbackTracker", () => {
   it("records and retrieves ratings", () => {
     const t = new FeedbackTracker();
     t.record(makeRating({ rating: "good" }));
-    t.record(makeRating({ rating: "bad", reason: "too slow" }));
+    t.record(makeRating({ rating: "bad", reason: "too slow", tags: ["latency", "verbosity"] }));
     const recent = t.getRecent();
     assert.equal(recent.length, 2);
     assert.equal(recent[0].rating, "bad"); // most recent first
     assert.equal(recent[0].reason, "too slow");
+    assert.deepEqual(recent[0].tags, ["latency", "verbosity"]);
     assert.equal(recent[1].rating, "good");
   });
 
@@ -139,5 +140,13 @@ describe("isValidRating", () => {
 
   it("accepts valid bad rating", () => {
     assert.equal(isValidRating({ provider: "c", rating: "bad", timestamp: 1 }), true);
+  });
+
+  it("accepts tags and request identifiers", () => {
+    assert.equal(isValidRating({ provider: "c", rating: "good", timestamp: 1, tags: ["correct", "fast"], requestId: "r1", conversationId: "c1" }), true);
+  });
+
+  it("rejects invalid tags", () => {
+    assert.equal(isValidRating({ provider: "c", rating: "good", timestamp: 1, tags: ["ok", 1] }), false);
   });
 });

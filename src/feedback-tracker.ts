@@ -12,8 +12,11 @@ export type Rating = {
   routeId: string;
   rating: RatingValue;
   reason?: string;
+  tags?: string[];
   tier?: string;
   intent?: string;
+  requestId?: string;
+  conversationId?: string;
   timestamp: number;
 };
 
@@ -100,6 +103,10 @@ export function isValidRating(r: unknown): boolean {
     typeof o.provider === "string" &&
     typeof o.rating === "string" &&
     (o.rating === "good" || o.rating === "bad") &&
+    (o.reason === undefined || typeof o.reason === "string") &&
+    (o.tags === undefined || (Array.isArray(o.tags) && o.tags.every((t) => typeof t === "string"))) &&
+    (o.requestId === undefined || typeof o.requestId === "string") &&
+    (o.conversationId === undefined || typeof o.conversationId === "string") &&
     typeof o.timestamp === "number"
   );
 }
