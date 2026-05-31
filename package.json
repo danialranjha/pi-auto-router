@@ -1,21 +1,26 @@
 {
   "name": "pi-auto-router",
   "version": "0.2.0",
-  "description": "Subscription-first automatic model/provider failover router for pi coding agent",
+  "description": "Multi-provider auto-router for pi coding agent with same-request failover, budget-aware routing, live usage pacing, and policy-based routing",
   "license": "MIT",
   "keywords": [
     "pi-package",
+    "pi-agent",
     "pi",
     "pi-coding-agent",
     "extension",
-    "model",
-    "router",
+    "llm-router",
+    "model-router",
+    "multi-provider",
     "failover",
+    "budget-aware",
+    "quota-aware",
     "llm"
   ],
   "type": "module",
   "files": [
     "index.ts",
+    "src",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
@@ -28,10 +33,12 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
@@ -39,7 +46,8 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/danialranjha/pi-auto-router/main/docs/preview.png"
   },
   "repository": {
     "type": "git",

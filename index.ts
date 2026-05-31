@@ -12,8 +12,8 @@ import {
   type Context,
   type Model,
   type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildRoutingContext } from "./src/context-analyzer.ts";
 import { DEFAULT_SHORTCUTS, listShortcuts, parseShortcut } from "./src/shortcut-parser.ts";
 import { inferRequirements, solveConstraints, tierToRequirements, type CapabilityMap, type ConstraintRequirements } from "./src/constraint-solver.ts";

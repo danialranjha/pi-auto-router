@@ -1,8 +1,8 @@
 # pi-auto-router
 
-A subscription-first automatic model/provider failover extension for [pi coding agent](https://github.com/badlogic/pi-mono).
+`pi-auto-router` is a multi-provider auto-router for [pi coding agent](https://github.com/badlogic/pi-mono) that keeps one stable set of Pi models while automatically failing over the **same request** across Claude, Gemini, Codex, DeepSeek, Ollama, and other configured targets.
 
-It exposes a custom provider with opinionated routing profiles:
+It exposes opinionated routing profiles:
 
 - `auto-router/subscription-reasoning`
 - `auto-router/subscription-swe`
@@ -10,7 +10,15 @@ It exposes a custom provider with opinionated routing profiles:
 - `auto-router/subscription-economy`
 - `auto-router/subscription-fast`
 
-Unlike a simple model switcher, `auto-router` can retry the **same request** across a configured route chain when a provider hits retryable failures like rate limits, temporary overload, or transient network/server errors.
+![pi-auto-router preview](docs/preview.png)
+
+## Why people install it
+
+- **Same-request failover** when a provider hits rate limits, overload, or transient errors
+- **Subscription-first routing** so you can prefer bundled/OAuth access before per-token spend
+- **Budget- and quota-aware routing** with daily/monthly budgets and live usage pacing, so the router backs off providers you’re burning through too quickly
+- **Policy-based model selection** using shortcuts, intent heuristics, constraints, and route rules
+- **Stable Pi-facing model names** so you can keep using one router profile instead of manually switching models
 
 ## Highlights
 

@@ -1,4 +1,4 @@
-import type { Context } from "@mariozechner/pi-ai";
+import type { Context } from "@earendil-works/pi-ai";
 
 function randomCallId(): string {
   return `call_${Math.random().toString(36).substring(2, 11)}`;

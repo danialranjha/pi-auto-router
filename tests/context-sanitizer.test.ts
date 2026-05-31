@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { Context } from "@mariozechner/pi-ai";
+import type { Context } from "@earendil-works/pi-ai";
 import { sanitizeContext } from "../src/context-sanitizer.ts";
 
 function makeContext(): Context {
