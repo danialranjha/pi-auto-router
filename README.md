@@ -12,6 +12,53 @@ It exposes opinionated routing profiles:
 
 ![pi-auto-router live demo](https://imgzen.xyz/1780380056350-g5546y74.gif)
 
+## Install
+
+```bash
+pi install npm:pi-auto-router
+```
+
+### Update
+
+```bash
+pi update npm:pi-auto-router
+```
+
+### Try without installing
+
+```bash
+pi -e npm:pi-auto-router
+```
+
+### Install from GitHub instead
+
+```bash
+pi install git:github.com/danialranjha/pi-auto-router
+```
+
+## 30-second quick start
+
+1. Install the package:
+
+   ```bash
+   pi install npm:pi-auto-router
+   ```
+
+2. Reload pi with `/reload`
+3. Open `/model`
+4. Select one of:
+   - `auto-router/subscription-reasoning`
+   - `auto-router/subscription-swe`
+   - `auto-router/subscription-long-context`
+   - `auto-router/subscription-economy`
+   - `auto-router/subscription-fast`
+5. Verify it is working:
+
+   ```text
+   /auto-router list
+   /auto-router explain
+   ```
+
 ## Why people install it
 
 - **Same-request failover** when a provider hits rate limits, overload, or transient errors
@@ -34,60 +81,6 @@ It exposes opinionated routing profiles:
 - **Cost-aware ranking** — estimated USD cost as secondary tiebreaker within latency-sorted UVI buckets
 - **Routing decision explainer** so you can see why a target was selected
 - **Richer operator commands** for status, route inspection, search, aliases, reloads, budgets, UVI, rules, circuit status, and explanations
-
-## Install
-
-### From GitHub
-
-```bash
-pi install git:github.com/danialranjha/pi-auto-router
-```
-
-### Update
-
-To update to the latest version from GitHub:
-
-```bash
-pi update git:github.com/danialranjha/pi-auto-router
-```
-
-Alternatively, if you are developing locally:
-
-```bash
-cd /path/to/pi-auto-router
-git pull
-npm install
-npm run build
-```
-
-Then reload the extension inside pi:
-
-```text
-/auto-router reload
-```
-
-### Try without installing
-
-```bash
-pi -e git:github.com/danialranjha/pi-auto-router
-```
-
-## Quick start
-
-1. Install the package
-2. Reload pi with `/reload`
-3. Open `/model`
-4. Select one of:
-   - `auto-router/subscription-reasoning`
-   - `auto-router/subscription-swe`
-   - `auto-router/subscription-long-context`
-   - `auto-router/subscription-economy`
-   - `auto-router/subscription-fast`
-5. Inspect routing with:
-
-```text
-/auto-router list
-```
 
 ## Config file
 
