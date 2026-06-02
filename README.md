@@ -10,7 +10,7 @@ It exposes opinionated routing profiles:
 - `auto-router/subscription-economy`
 - `auto-router/subscription-fast`
 
-![pi-auto-router preview](docs/preview.png)
+![pi-auto-router live demo](https://imgzen.xyz/1780360638423-7u41hics.gif)
 
 ## Why people install it
 
