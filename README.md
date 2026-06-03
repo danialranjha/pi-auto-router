@@ -117,20 +117,20 @@ cp auto-router.routes.example.json ~/.pi/agent/extensions/auto-router.routes.jso
       "targets": [
         {
           "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-7",
-          "label": "L1: Claude Opus 4.7 (Frontier)"
+          "modelId": "claude-opus-4-8",
+          "label": "L1: Claude Opus 4.8 (Frontier)"
         },
         {
           "provider": "google",
-          "modelId": "gemini-2.5-pro",
-          "label": "L2: Gemini 2.5 Pro (API Key)",
+          "modelId": "gemini-3.1-pro-preview",
+          "label": "L2: Gemini 3.1 Pro Preview (API Key)",
           "billing": "per-token"
         },
         {
           "provider": "openai-codex",
-          "modelId": "gpt-5.4",
+          "modelId": "gpt-5.5",
           "authProvider": "openai-codex",
-          "label": "L3: GPT-5.4"
+          "label": "L3: GPT-5.5"
         },
         {
           "provider": "ollama",
@@ -144,8 +144,8 @@ cp auto-router.routes.example.json ~/.pi/agent/extensions/auto-router.routes.jso
     "reasoning": ["auto-router/subscription-reasoning"],
     "swe": ["auto-router/subscription-swe"],
     "claude": [
-      "claude-agent-sdk/claude-opus-4-7",
-      "claude-agent-sdk/claude-opus-4-6"
+      "claude-agent-sdk/claude-opus-4-8",
+      "claude-agent-sdk/claude-opus-4-7"
     ]
   }
 }

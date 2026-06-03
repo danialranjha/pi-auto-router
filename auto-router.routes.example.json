@@ -19,8 +19,8 @@
       "targets": [
         {
           "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-7",
-          "label": "L1: Claude Opus 4.7 (Frontier)"
+          "modelId": "claude-opus-4-8",
+          "label": "L1: Claude Opus 4.8 (Frontier)"
         },
         {
           "provider": "deepseek",
@@ -30,14 +30,14 @@
         },
         {
           "provider": "openai-codex",
-          "modelId": "gpt-5.4",
+          "modelId": "gpt-5.5",
           "authProvider": "openai-codex",
-          "label": "L3: GPT-5.4"
+          "label": "L3: GPT-5.5"
         },
         {
           "provider": "google",
-          "modelId": "gemini-2.5-pro",
-          "label": "L4: Gemini 2.5 Pro (API Key)",
+          "modelId": "gemini-3.1-pro-preview",
+          "label": "L4: Gemini 3.1 Pro Preview (API Key)",
           "billing": "per-token"
         },
         {
@@ -56,8 +56,8 @@
       "targets": [
         {
           "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-7",
-          "label": "L1: Claude Opus 4.7 (Top SWE)"
+          "modelId": "claude-opus-4-8",
+          "label": "L1: Claude Opus 4.8 (Top SWE)"
         },
         {
           "provider": "deepseek",
@@ -67,14 +67,14 @@
         },
         {
           "provider": "openai-codex",
-          "modelId": "gpt-5.4",
+          "modelId": "gpt-5.5",
           "authProvider": "openai-codex",
-          "label": "L3: GPT-5.4 (Alternative SOTA)"
+          "label": "L3: GPT-5.5 (Alternative SOTA)"
         },
         {
           "provider": "google",
-          "modelId": "gemini-2.5-pro",
-          "label": "L4: Gemini 2.5 Pro (API Key Fallback)",
+          "modelId": "gemini-3.1-pro-preview",
+          "label": "L4: Gemini 3.1 Pro Preview (API Key Fallback)",
           "billing": "per-token"
         },
         {
@@ -110,14 +110,14 @@
       "targets": [
         {
           "provider": "google",
-          "modelId": "gemini-2.5-pro",
-          "label": "L1: Gemini 2.5 Pro (API Key Long Context)",
+          "modelId": "gemini-3.1-pro-preview",
+          "label": "L1: Gemini 3.1 Pro Preview (API Key Long Context)",
           "billing": "per-token"
         },
         {
           "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-7",
-          "label": "L2: Claude Opus 4.7 (1M Context)"
+          "modelId": "claude-opus-4-8",
+          "label": "L2: Claude Opus 4.8 (1M Context)"
         },
         {
           "provider": "nvidia",
@@ -154,14 +154,14 @@
         },
         {
           "provider": "google",
-          "modelId": "gemini-2.5-flash",
-          "label": "L3: Gemini 2.5 Flash (API Key Fast/Cheap)",
+          "modelId": "gemini-3.5-flash",
+          "label": "L3: Gemini 3.5 Flash (API Key Fast/Cheap)",
           "billing": "per-token"
         },
         {
           "provider": "claude-agent-sdk",
-          "modelId": "claude-sonnet-4-5",
-          "label": "L4: Claude Sonnet 4.5 (Sub Fallback)"
+          "modelId": "claude-sonnet-4-6",
+          "label": "L4: Claude Sonnet 4.6 (Sub Fallback)"
         }
       ]
     },
@@ -174,8 +174,8 @@
       "targets": [
         {
           "provider": "google",
-          "modelId": "gemini-2.5-flash",
-          "label": "L1: Gemini 2.5 Flash (API Key)",
+          "modelId": "gemini-3.5-flash",
+          "label": "L1: Gemini 3.5 Flash (API Key)",
           "billing": "per-token"
         },
         {
@@ -205,19 +205,19 @@
     "economy": ["auto-router/subscription-economy"],
     "fast": ["auto-router/subscription-fast"],
     "claude": [
-      "claude-agent-sdk/claude-opus-4-7",
-      "claude-agent-sdk/claude-opus-4-6"
+      "claude-agent-sdk/claude-opus-4-8",
+      "claude-agent-sdk/claude-opus-4-7"
     ],
     "gemini": [
-      "google/gemini-2.5-pro",
-      "google/gemini-2.5-flash"
+      "google/gemini-3.1-pro-preview",
+      "google/gemini-3.5-flash"
     ],
     "deepseek": [
       "deepseek/deepseek-v4-pro",
       "deepseek/deepseek-v4-flash"
     ],
     "codex": [
-      "openai-codex/gpt-5.4",
+      "openai-codex/gpt-5.5",
       "openai-codex/gpt-5.4-mini"
     ],
     "glm": ["ollama/glm-5.1:cloud"]

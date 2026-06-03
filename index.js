@@ -15,10 +15,10 @@ const DEFAULT_ROUTES = {
         reasoning: true,
         input: ["text", "image"],
         targets: [
-            { provider: "claude-agent-sdk", modelId: "claude-opus-4-6", label: "Claude Opus 4.6 via Claude Code" },
-            { provider: "google", modelId: "gemini-2.5-pro", label: "Gemini 2.5 Pro via API key", billing: "per-token" },
-            { provider: "openai-codex", modelId: "gpt-5.4", authProvider: "openai-codex", label: "GPT-5.4" },
-            { provider: "claude-agent-sdk", modelId: "claude-opus-4-5", label: "Claude Opus 4.5 via Claude Code" },
+            { provider: "claude-agent-sdk", modelId: "claude-opus-4-8", label: "Claude Opus 4.8 via Claude Code" },
+            { provider: "openai-codex", modelId: "gpt-5.5", authProvider: "openai-codex", label: "GPT-5.5" },
+            { provider: "google", modelId: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview via API key", billing: "per-token" },
+            { provider: "claude-agent-sdk", modelId: "claude-opus-4-7", label: "Claude Opus 4.7 via Claude Code" },
             { provider: "ollama", modelId: "glm-5.1:cloud", label: "GLM-5.1 via Ollama Cloud Subscription" }
         ]
     },
@@ -27,21 +27,21 @@ const DEFAULT_ROUTES = {
         reasoning: true,
         input: ["text", "image"],
         targets: [
-            { provider: "claude-agent-sdk", modelId: "claude-opus-4-6", label: "Claude Opus 4.6 via Claude Code" },
-            { provider: "openai-codex", modelId: "gpt-5.4", authProvider: "openai-codex", label: "GPT-5.4" },
-            { provider: "google", modelId: "gemini-2.5-pro", label: "Gemini 2.5 Pro via API key", billing: "per-token" },
-            { provider: "claude-agent-sdk", modelId: "claude-opus-4-5", label: "Claude Opus 4.5 via Claude Code" },
+            { provider: "claude-agent-sdk", modelId: "claude-opus-4-8", label: "Claude Opus 4.8 via Claude Code" },
+            { provider: "openai-codex", modelId: "gpt-5.5", authProvider: "openai-codex", label: "GPT-5.5" },
+            { provider: "google", modelId: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview via API key", billing: "per-token" },
+            { provider: "claude-agent-sdk", modelId: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 via Claude Code" },
             { provider: "ollama", modelId: "glm-5.1:cloud", label: "GLM-5.1 via Ollama Cloud Subscription" }
         ]
     },
     "subscription-fast": {
         name: "Subscription Fast Router",
-        reasoning: true,
+        reasoning: false,
         input: ["text", "image"],
         targets: [
-            { provider: "google", modelId: "gemini-2.5-flash", label: "Gemini 2.5 Flash via API key", billing: "per-token" },
+            { provider: "google", modelId: "gemini-3.5-flash", label: "Gemini 3.5 Flash via API key", billing: "per-token" },
+            { provider: "claude-agent-sdk", modelId: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 via Claude Code" },
             { provider: "openai-codex", modelId: "gpt-5.4-mini", authProvider: "openai-codex", label: "GPT-5.4 Mini" },
-            { provider: "claude-agent-sdk", modelId: "claude-sonnet-4-5", label: "Claude Sonnet 4.5 via Claude Code" },
             { provider: "openai-codex", modelId: "gpt-5.2-codex", authProvider: "openai-codex", label: "GPT-5.2 Codex" },
             { provider: "ollama", modelId: "glm-5.1:cloud", label: "GLM-5.1 via Ollama Cloud Subscription" }
         ]
@@ -51,10 +51,10 @@ const DEFAULT_ALIASES = {
     premium: ["auto-router/subscription-premium"],
     coding: ["auto-router/subscription-coding"],
     fast: ["auto-router/subscription-fast"],
-    glm: ["ollama/glm-5.1:cloud"],
-    claude: ["claude-agent-sdk/claude-opus-4-6", "claude-agent-sdk/claude-opus-4-5"],
-    gemini: ["google/gemini-2.5-pro", "google/gemini-2.5-flash"],
-    codex: ["openai-codex/gpt-5.4", "openai-codex/gpt-5.2-codex"]
+    claude: ["claude-agent-sdk/claude-opus-4-8", "claude-agent-sdk/claude-opus-4-7", "claude-agent-sdk/claude-sonnet-4-6"],
+    gemini: ["google/gemini-3.1-pro-preview", "google/gemini-3.5-flash"],
+    codex: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4", "openai-codex/gpt-5.4-mini"],
+    glm: ["ollama/glm-5.1:cloud"]
 };
 let routesCache = DEFAULT_ROUTES;
 let aliasesCache = DEFAULT_ALIASES;
