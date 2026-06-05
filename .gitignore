@@ -4,3 +4,8 @@ check-models.ts
 test-logic.js
 .DS_Store
 .pi/
+
+# Local environment / secrets — never commit credentials
+.env
+.env.*
+!.env.example
