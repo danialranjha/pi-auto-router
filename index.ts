@@ -1955,7 +1955,12 @@ function refreshStatus(routeId?: string) {
   try {
     const activeModel = ctx.model;
     if (activeModel?.provider === PROVIDER_ID) {
-      ctx.ui.setStatus("auto-router", getStatusLine(routeId ?? activeModel.id));
+      const routeName = routeId ?? activeModel.id;
+      const activeTarget = activeTargetByRoute.get(routeName);
+      const lastTarget = lastAttemptByRoute.get(routeName);
+      const cur = activeTarget || lastTarget;
+      const label = cur ? `→ ${cur}` : "";
+      ctx.ui.setStatus("auto-router", label || undefined);
     } else {
       ctx.ui.setStatus("auto-router", undefined);
     }
@@ -2038,14 +2043,16 @@ function rebuildProvider(pi: ExtensionAPI) {
     api: "auto-router-api",
     models: Object.entries(routesCache).map(([routeId, route]) => {
       const limits = getPrimaryModelLimitsFn(route);
+      const thinking = route.reasoning !== false;
       return {
         id: routeId,
         name: route.name ?? routeId,
-        reasoning: route.reasoning !== false,
+        reasoning: thinking,
         input: route.input ?? ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: limits.contextWindow,
         maxTokens: limits.maxTokens,
+        thinkingLevelMap: thinking ? { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "max" } : undefined,
       };
     }),
     streamSimple: streamAutoRouter,
