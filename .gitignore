@@ -9,3 +9,4 @@ test-logic.js
 .env
 .env.*
 !.env.example
+docs/tweet-assets/

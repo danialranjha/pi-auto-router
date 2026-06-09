@@ -1,6 +1,6 @@
 # pi-auto-router
 
-`pi-auto-router` is a multi-provider auto-router for [pi coding agent](https://github.com/badlogic/pi-mono) that keeps one stable set of Pi models while automatically failing over the **same request** across Claude, Gemini, Codex, DeepSeek, Ollama, and other configured targets.
+`pi-auto-router` is an auto-router and failover extension for [Pi coding agent](https://github.com/badlogic/pi-mono). It keeps one stable set of Pi model names while automatically routing and failing over the **same request** across Claude, Gemini, Codex, DeepSeek, Ollama, OpenRouter, and other configured targets.
 
 It exposes opinionated routing profiles:
 
