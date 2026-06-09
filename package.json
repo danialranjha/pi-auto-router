@@ -1,6 +1,6 @@
 {
   "name": "pi-auto-router",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "pi-auto-router: auto-router and failover extension for Pi coding agent with multi-provider routing, budget-aware policies, and same-request failover",
   "license": "MIT",
   "keywords": [
