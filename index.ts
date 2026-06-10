@@ -58,6 +58,7 @@ type RouteDefinition = {
   maxTokens?: number;
   targets: RouteTarget[];
   policyRules?: PolicyRuleConfig[];
+  sortBy?: "config" | "latency" | "cost";
 };
 
 type RoutesFile = {
@@ -442,6 +443,9 @@ function loadRoutesConfig(): void {
         maxTokens: typeof routeDef.maxTokens === "number" ? routeDef.maxTokens : undefined,
         targets: targets.map((target) => ({ ...target })),
         policyRules,
+        sortBy: (routeDef as Record<string, unknown>).sortBy === "config" || (routeDef as Record<string, unknown>).sortBy === "latency" || (routeDef as Record<string, unknown>).sortBy === "cost"
+          ? (routeDef as Record<string, unknown>).sortBy as "config" | "latency" | "cost"
+          : undefined,
       };
     }
 
@@ -550,9 +554,18 @@ function getInnerModel(target: RouteTarget, context?: Context): Model<Api> {
 function getPrimaryModelLimitsFn(route: RouteDefinition): { contextWindow: number; maxTokens: number } {
   return getPrimaryModelLimits(route, (provider, modelId) => {
     try {
-      const model = getModel(provider, modelId);
-      if (model) return { contextWindow: model.contextWindow, maxTokens: model.maxTokens };
+      // Try pi-ai getModel first (built-in providers)
+      const direct = getModel(provider, modelId);
+      if (direct) return { contextWindow: direct.contextWindow, maxTokens: direct.maxTokens };
     } catch { /* SDK may throw */ }
+    // Fallback: search model registry (custom providers like opencode-go-1)
+    try {
+      const registry = (latestUiContext as any)?.modelRegistry;
+      const available: Array<{ provider: string; id: string; contextWindow?: number; maxTokens?: number }> =
+        typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+      const found = available.find(m => m.provider === provider && m.id === modelId);
+      if (found?.contextWindow && found?.maxTokens) return { contextWindow: found.contextWindow, maxTokens: found.maxTokens };
+    } catch { /* ignore */ }
     return undefined;
   });
 }
@@ -670,8 +683,17 @@ async function tryTarget(
     flushed = true;
   };
 
-  const sanitized = sanitizeContext(context, target.provider);
-  const inner = streamSimple(innerModel, sanitized, { ...options, apiKey: token });
+  const sanitized = sanitizeContext(
+    context,
+    target.provider,
+    (globalThis as Record<string, unknown>).__piCacheOptimizerPrompt__ as string | undefined,
+  );
+  // Forward the session cache key from pi-cache-optimizer so the underlying
+  // provider can associate this request with the same cache prefix.
+  const cacheKey = (globalThis as Record<string, unknown>).__piCacheOptimizerCacheKey__ as string | undefined;
+  const innerOpts: Record<string, unknown> = { ...options, apiKey: token };
+  if (cacheKey) innerOpts.prompt_cache_key = cacheKey;
+  const inner = streamSimple(innerModel, sanitized, innerOpts as typeof options);
   let lastMessage: AssistantMessage | undefined;
 
   try {
@@ -1175,28 +1197,32 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       const uviNotes = partition.uviNotes;
 
       // Sort within UVI buckets: latency → cost → config order.
-      // Build a config-order index so we can break ties by priority (L1 before L8).
-      const configIndex = new Map(ctx.availableTargets.map((t, i) => [getTargetKey(t), i]));
-      const rankedSort = (a: RouteTarget, b: RouteTarget): number => {
-        // 1. Both have latency data — compare directly (lower is better)
-        const la = latencyTracker.getAvgLatency(a.provider);
-        const lb = latencyTracker.getAvgLatency(b.provider);
-        if (la !== null && lb !== null && la !== lb) return la - lb;
-        // 2. One or both have unknown latency — sort by estimated cost (cheaper first)
-        const ca = estimateModelCost(a, context, ctx.estimatedTokens);
-        const cb = estimateModelCost(b, context, ctx.estimatedTokens);
-        if (ca !== null && cb !== null && ca !== cb) return ca - cb;
-        // 3. One has cost data, the other doesn't — prefer the one we can price
-        if (ca !== null && cb === null) return -1;
-        if (ca === null && cb !== null) return 1;
-        // 4. Everything tied — preserve config order (L1 before L8)
-        const ia = configIndex.get(getTargetKey(a)) ?? 999;
-        const ib = configIndex.get(getTargetKey(b)) ?? 999;
-        return ia - ib;
-      };
-      partition.promoted.sort(rankedSort);
-      partition.normal.sort(rankedSort);
-      partition.demoted.sort(rankedSort);
+      // When route.sortBy is "config", skip all sorting — targets stay in config order.
+      const routeSortBy = routesCache[routeId]?.sortBy;
+      if (routeSortBy !== "config") {
+        // Build a config-order index so we can break ties by priority (L1 before L8).
+        const configIndex = new Map(ctx.availableTargets.map((t, i) => [getTargetKey(t), i]));
+        const rankedSort = (a: RouteTarget, b: RouteTarget): number => {
+          // 1. Both have latency data — compare directly (lower is better)
+          const la = latencyTracker.getAvgLatency(a.provider);
+          const lb = latencyTracker.getAvgLatency(b.provider);
+          if (la !== null && lb !== null && la !== lb) return la - lb;
+          // 2. One or both have unknown latency — sort by estimated cost (cheaper first)
+          const ca = estimateModelCost(a, context, ctx.estimatedTokens);
+          const cb = estimateModelCost(b, context, ctx.estimatedTokens);
+          if (ca !== null && cb !== null && ca !== cb) return ca - cb;
+          // 3. One has cost data, the other doesn't — prefer the one we can price
+          if (ca !== null && cb === null) return -1;
+          if (ca === null && cb !== null) return 1;
+          // 4. Everything tied — preserve config order (L1 before L8)
+          const ia = configIndex.get(getTargetKey(a)) ?? 999;
+          const ib = configIndex.get(getTargetKey(b)) ?? 999;
+          return ia - ib;
+        };
+        partition.promoted.sort(rankedSort);
+        partition.normal.sort(rankedSort);
+        partition.demoted.sort(rankedSort);
+      }
 
       // === PolicyEngine: apply post-partition hints (prefer/require providers) ===
       if (effectiveHints?.requireProvider) {
@@ -1219,6 +1245,10 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         }
       }
       if (effectiveHints?.preferProviders && effectiveHints.preferProviders.length > 0) {
+        // When sortBy is "config", preference hints still apply (requireProvider move-to-front
+        // above still works), but the intra-bucket sort is skipped. This keeps config order
+        // while still respecting explicit provider requirements.
+        if (routeSortBy !== "config") {
         const preferSet = new Set(effectiveHints.preferProviders);
         const preferSort = (a: RouteTarget, b: RouteTarget): number => {
           const aPref = preferSet.has(a.provider) ? 0 : 1;
@@ -1227,11 +1257,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           // Within same preference group, sort by latency
           const la = latencyTracker.getAvgLatency(a.provider);
           const lb = latencyTracker.getAvgLatency(b.provider);
-          if (la === null && lb === null) {
-            // fall through to cost
-          } else if (la === null) return 1;
-          else if (lb === null) return -1;
-          else if (la !== lb) return la - lb;
+          if (la !== null && lb !== null && la !== lb) return la - lb;
           // Same latency — cheaper first
           const ca = estimateModelCost(a, context, ctx.estimatedTokens);
           const cb = estimateModelCost(b, context, ctx.estimatedTokens);
@@ -1243,6 +1269,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         partition.promoted.sort(preferSort);
         partition.normal.sort(preferSort);
         // Leave demoted as-is (don't promote stressed providers via preference)
+        }
       }
       const orderedAudited = [...partition.promoted, ...partition.normal, ...partition.demoted];
       const pipelineTargets = orderedAudited.length > 0
@@ -1955,7 +1982,24 @@ function refreshStatus(routeId?: string) {
   try {
     const activeModel = ctx.model;
     if (activeModel?.provider === PROVIDER_ID) {
-      ctx.ui.setStatus("auto-router", getStatusLine(routeId ?? activeModel.id));
+      const routeName = routeId ?? activeModel.id;
+      const activeTarget = activeTargetByRoute.get(routeName);
+      const lastTarget = lastAttemptByRoute.get(routeName);
+      const cur = activeTarget || lastTarget;
+      let label = cur ? `→ ${cur}` : "";
+      // Show the current target's context window when available
+      if (cur) {
+        const decision = lastDecisionByRoute.get(routeName);
+        if (decision) {
+          try {
+            const resolved = resolveModelFromRegistry(decision.target, latestUiContext as unknown as Context);
+            if (resolved && typeof resolved.contextWindow === "number" && resolved.contextWindow > 0) {
+              label += ` (${(resolved.contextWindow / 1000).toFixed(0)}K ctx)`;
+            }
+          } catch { /* ignore */ }
+        }
+      }
+      ctx.ui.setStatus("auto-router", label || undefined);
     } else {
       ctx.ui.setStatus("auto-router", undefined);
     }
@@ -2038,18 +2082,32 @@ function rebuildProvider(pi: ExtensionAPI) {
     api: "auto-router-api",
     models: Object.entries(routesCache).map(([routeId, route]) => {
       const limits = getPrimaryModelLimitsFn(route);
+      const thinking = route.reasoning !== false;
       return {
         id: routeId,
         name: route.name ?? routeId,
-        reasoning: route.reasoning !== false,
+        reasoning: thinking,
         input: route.input ?? ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: limits.contextWindow,
         maxTokens: limits.maxTokens,
+        thinkingLevelMap: thinking ? { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh" } : undefined,
       };
     }),
     streamSimple: streamAutoRouter,
   });
+}
+
+// Register with pi-cache-optimizer so it can show cache stats for the
+// underlying provider rather than the auto-router virtual model.
+// https://github.com/jiangge/pi-cache-optimizer
+if (typeof globalThis !== "undefined") {
+  (globalThis as Record<string, unknown>).__piCacheOptimizerRouter = {
+    getRoutedModel: (routeId: string) => {
+      const d = lastDecisionByRoute.get(routeId);
+      return d ? { provider: d.target.provider, modelId: d.target.modelId } : undefined;
+    },
+  };
 }
 
 export default function (pi: ExtensionAPI) {

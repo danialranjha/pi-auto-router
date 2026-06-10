@@ -14,13 +14,13 @@ function stripOpenAICodexReplayMetadata(message: any): any {
   return next;
 }
 
-export function sanitizeContext(context: Context, provider?: string): Context {
+export function sanitizeContext(context: Context, provider?: string, systemPrompt?: string): Context {
   const messages = (context as any)?.messages;
   if (!Array.isArray(messages)) return context;
 
   const shouldStripReplayIds = provider === "openai-codex";
 
-  const newMessages = messages.map((msg: any) => {
+  let newMessages = messages.map((msg: any) => {
     if (!msg) return msg;
     const newMsg = shouldStripReplayIds ? stripOpenAICodexReplayMetadata(msg) : { ...msg };
 
@@ -51,6 +51,13 @@ export function sanitizeContext(context: Context, provider?: string): Context {
 
     return newMsg;
   });
+
+  // Prepend the cache-optimized system prompt (from pi-cache-optimizer)
+  // as a system message so the underlying provider benefits from the
+  // stable-prefix reorder / skill compression.
+  if (systemPrompt) {
+    newMessages = [{ role: "system", content: systemPrompt }, ...newMessages];
+  }
 
   return { ...context, messages: newMessages } as Context;
 }
