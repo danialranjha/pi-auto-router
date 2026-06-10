@@ -168,13 +168,25 @@ export function getPrimaryModelLimits(
   resolveModel: (provider: string, modelId: string) => PrimaryModelLimits | undefined,
 ): PrimaryModelLimits {
   if (route.contextWindow && route.maxTokens) return { contextWindow: route.contextWindow, maxTokens: route.maxTokens };
-  const first = route.targets?.[0];
-  if (!first) return DEFAULT_PRIMARY_MODEL_LIMITS;
-  try {
-    const provider = first.provider === "claude-agent-sdk" ? "anthropic" : first.provider;
-    const model = resolveModel(provider, first.modelId);
-    if (model) return { contextWindow: model.contextWindow, maxTokens: model.maxTokens };
-  } catch { /* fall through */ }
+  const targets = route.targets ?? [];
+  if (targets.length === 0) return DEFAULT_PRIMARY_MODEL_LIMITS;
+
+  // Report the maximum capabilities across all targets so pi can determine
+  // whether this route can handle a given context size, regardless of which
+  // target auto-router ultimately selects.
+  let bestCtx = 0;
+  let bestMax = 0;
+  for (const t of targets) {
+    try {
+      const provider = t.provider === "claude-agent-sdk" ? "anthropic" : t.provider;
+      const model = resolveModel(provider, t.modelId);
+      if (model) {
+        if (model.contextWindow > bestCtx) bestCtx = model.contextWindow;
+        if (model.maxTokens > bestMax) bestMax = model.maxTokens;
+      }
+    } catch { /* skip unresolvable targets */ }
+  }
+  if (bestCtx > 0 && bestMax > 0) return { contextWindow: bestCtx, maxTokens: bestMax };
   return DEFAULT_PRIMARY_MODEL_LIMITS;
 }
 
