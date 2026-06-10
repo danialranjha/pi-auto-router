@@ -1236,11 +1236,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           // Within same preference group, sort by latency
           const la = latencyTracker.getAvgLatency(a.provider);
           const lb = latencyTracker.getAvgLatency(b.provider);
-          if (la === null && lb === null) {
-            // fall through to cost
-          } else if (la === null) return 1;
-          else if (lb === null) return -1;
-          else if (la !== lb) return la - lb;
+          if (la !== null && lb !== null && la !== lb) return la - lb;
           // Same latency — cheaper first
           const ca = estimateModelCost(a, context, ctx.estimatedTokens);
           const cb = estimateModelCost(b, context, ctx.estimatedTokens);
