@@ -1977,7 +1977,23 @@ function refreshStatus(routeId?: string) {
       const activeTarget = activeTargetByRoute.get(routeName);
       const lastTarget = lastAttemptByRoute.get(routeName);
       const cur = activeTarget || lastTarget;
-      const label = cur ? `→ ${cur}` : "";
+      let label = cur ? `→ ${cur}` : "";
+      // Show the current target's context window when available
+      if (cur) {
+        const decision = lastDecisionByRoute.get(routeName);
+        if (decision) {
+          const limits = getPrimaryModelLimits(
+            { targets: [decision.target] },
+            (p, m) => {
+              try { const model = getModel(p, m); return model ? { contextWindow: model.contextWindow, maxTokens: model.maxTokens } : undefined; }
+              catch { return undefined; }
+            },
+          );
+          if (limits.contextWindow > 0) {
+            label += ` (${(limits.contextWindow / 1000).toFixed(0)}K ctx)`;
+          }
+        }
+      }
       ctx.ui.setStatus("auto-router", label || undefined);
     } else {
       ctx.ui.setStatus("auto-router", undefined);
