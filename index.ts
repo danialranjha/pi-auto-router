@@ -670,8 +670,17 @@ async function tryTarget(
     flushed = true;
   };
 
-  const sanitized = sanitizeContext(context, target.provider);
-  const inner = streamSimple(innerModel, sanitized, { ...options, apiKey: token });
+  const sanitized = sanitizeContext(
+    context,
+    target.provider,
+    (globalThis as Record<string, unknown>).__piCacheOptimizerPrompt__ as string | undefined,
+  );
+  // Forward the session cache key from pi-cache-optimizer so the underlying
+  // provider can associate this request with the same cache prefix.
+  const cacheKey = (globalThis as Record<string, unknown>).__piCacheOptimizerCacheKey__ as string | undefined;
+  const innerOpts: Record<string, unknown> = { ...options, apiKey: token };
+  if (cacheKey) innerOpts.prompt_cache_key = cacheKey;
+  const inner = streamSimple(innerModel, sanitized, innerOpts as typeof options);
   let lastMessage: AssistantMessage | undefined;
 
   try {
@@ -2057,6 +2066,18 @@ function rebuildProvider(pi: ExtensionAPI) {
     }),
     streamSimple: streamAutoRouter,
   });
+}
+
+// Register with pi-cache-optimizer so it can show cache stats for the
+// underlying provider rather than the auto-router virtual model.
+// https://github.com/jiangge/pi-cache-optimizer
+if (typeof globalThis !== "undefined") {
+  (globalThis as Record<string, unknown>).__piCacheOptimizerRouter = {
+    getRoutedModel: (routeId: string) => {
+      const d = lastDecisionByRoute.get(routeId);
+      return d ? { provider: d.target.provider, modelId: d.target.modelId } : undefined;
+    },
+  };
 }
 
 export default function (pi: ExtensionAPI) {
