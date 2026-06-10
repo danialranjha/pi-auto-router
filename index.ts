@@ -554,9 +554,18 @@ function getInnerModel(target: RouteTarget, context?: Context): Model<Api> {
 function getPrimaryModelLimitsFn(route: RouteDefinition): { contextWindow: number; maxTokens: number } {
   return getPrimaryModelLimits(route, (provider, modelId) => {
     try {
-      const model = getModel(provider, modelId);
-      if (model) return { contextWindow: model.contextWindow, maxTokens: model.maxTokens };
+      // Try pi-ai getModel first (built-in providers)
+      const direct = getModel(provider, modelId);
+      if (direct) return { contextWindow: direct.contextWindow, maxTokens: direct.maxTokens };
     } catch { /* SDK may throw */ }
+    // Fallback: search model registry (custom providers like opencode-go-1)
+    try {
+      const registry = (latestUiContext as any)?.modelRegistry;
+      const available: Array<{ provider: string; id: string; contextWindow?: number; maxTokens?: number }> =
+        typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+      const found = available.find(m => m.provider === provider && m.id === modelId);
+      if (found?.contextWindow && found?.maxTokens) return { contextWindow: found.contextWindow, maxTokens: found.maxTokens };
+    } catch { /* ignore */ }
     return undefined;
   });
 }
@@ -1982,16 +1991,12 @@ function refreshStatus(routeId?: string) {
       if (cur) {
         const decision = lastDecisionByRoute.get(routeName);
         if (decision) {
-          const limits = getPrimaryModelLimits(
-            { targets: [decision.target] },
-            (p, m) => {
-              try { const model = getModel(p, m); return model ? { contextWindow: model.contextWindow, maxTokens: model.maxTokens } : undefined; }
-              catch { return undefined; }
-            },
-          );
-          if (limits.contextWindow > 0) {
-            label += ` (${(limits.contextWindow / 1000).toFixed(0)}K ctx)`;
-          }
+          try {
+            const resolved = resolveModelFromRegistry(decision.target, latestUiContext as unknown as Context);
+            if (resolved && typeof resolved.contextWindow === "number" && resolved.contextWindow > 0) {
+              label += ` (${(resolved.contextWindow / 1000).toFixed(0)}K ctx)`;
+            }
+          } catch { /* ignore */ }
         }
       }
       ctx.ui.setStatus("auto-router", label || undefined);
