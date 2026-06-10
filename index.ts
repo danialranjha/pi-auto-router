@@ -2070,7 +2070,7 @@ function rebuildProvider(pi: ExtensionAPI) {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: limits.contextWindow,
         maxTokens: limits.maxTokens,
-        thinkingLevelMap: thinking ? { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "max" } : undefined,
+        thinkingLevelMap: thinking ? { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh" } : undefined,
       };
     }),
     streamSimple: streamAutoRouter,
