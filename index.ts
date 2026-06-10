@@ -58,6 +58,7 @@ type RouteDefinition = {
   maxTokens?: number;
   targets: RouteTarget[];
   policyRules?: PolicyRuleConfig[];
+  sortBy?: "config" | "latency" | "cost";
 };
 
 type RoutesFile = {
@@ -442,6 +443,9 @@ function loadRoutesConfig(): void {
         maxTokens: typeof routeDef.maxTokens === "number" ? routeDef.maxTokens : undefined,
         targets: targets.map((target) => ({ ...target })),
         policyRules,
+        sortBy: (routeDef as Record<string, unknown>).sortBy === "config" || (routeDef as Record<string, unknown>).sortBy === "latency" || (routeDef as Record<string, unknown>).sortBy === "cost"
+          ? (routeDef as Record<string, unknown>).sortBy as "config" | "latency" | "cost"
+          : undefined,
       };
     }
 
@@ -1184,28 +1188,32 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       const uviNotes = partition.uviNotes;
 
       // Sort within UVI buckets: latency → cost → config order.
-      // Build a config-order index so we can break ties by priority (L1 before L8).
-      const configIndex = new Map(ctx.availableTargets.map((t, i) => [getTargetKey(t), i]));
-      const rankedSort = (a: RouteTarget, b: RouteTarget): number => {
-        // 1. Both have latency data — compare directly (lower is better)
-        const la = latencyTracker.getAvgLatency(a.provider);
-        const lb = latencyTracker.getAvgLatency(b.provider);
-        if (la !== null && lb !== null && la !== lb) return la - lb;
-        // 2. One or both have unknown latency — sort by estimated cost (cheaper first)
-        const ca = estimateModelCost(a, context, ctx.estimatedTokens);
-        const cb = estimateModelCost(b, context, ctx.estimatedTokens);
-        if (ca !== null && cb !== null && ca !== cb) return ca - cb;
-        // 3. One has cost data, the other doesn't — prefer the one we can price
-        if (ca !== null && cb === null) return -1;
-        if (ca === null && cb !== null) return 1;
-        // 4. Everything tied — preserve config order (L1 before L8)
-        const ia = configIndex.get(getTargetKey(a)) ?? 999;
-        const ib = configIndex.get(getTargetKey(b)) ?? 999;
-        return ia - ib;
-      };
-      partition.promoted.sort(rankedSort);
-      partition.normal.sort(rankedSort);
-      partition.demoted.sort(rankedSort);
+      // When route.sortBy is "config", skip all sorting — targets stay in config order.
+      const routeSortBy = routesCache[routeId]?.sortBy;
+      if (routeSortBy !== "config") {
+        // Build a config-order index so we can break ties by priority (L1 before L8).
+        const configIndex = new Map(ctx.availableTargets.map((t, i) => [getTargetKey(t), i]));
+        const rankedSort = (a: RouteTarget, b: RouteTarget): number => {
+          // 1. Both have latency data — compare directly (lower is better)
+          const la = latencyTracker.getAvgLatency(a.provider);
+          const lb = latencyTracker.getAvgLatency(b.provider);
+          if (la !== null && lb !== null && la !== lb) return la - lb;
+          // 2. One or both have unknown latency — sort by estimated cost (cheaper first)
+          const ca = estimateModelCost(a, context, ctx.estimatedTokens);
+          const cb = estimateModelCost(b, context, ctx.estimatedTokens);
+          if (ca !== null && cb !== null && ca !== cb) return ca - cb;
+          // 3. One has cost data, the other doesn't — prefer the one we can price
+          if (ca !== null && cb === null) return -1;
+          if (ca === null && cb !== null) return 1;
+          // 4. Everything tied — preserve config order (L1 before L8)
+          const ia = configIndex.get(getTargetKey(a)) ?? 999;
+          const ib = configIndex.get(getTargetKey(b)) ?? 999;
+          return ia - ib;
+        };
+        partition.promoted.sort(rankedSort);
+        partition.normal.sort(rankedSort);
+        partition.demoted.sort(rankedSort);
+      }
 
       // === PolicyEngine: apply post-partition hints (prefer/require providers) ===
       if (effectiveHints?.requireProvider) {
@@ -1228,6 +1236,10 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         }
       }
       if (effectiveHints?.preferProviders && effectiveHints.preferProviders.length > 0) {
+        // When sortBy is "config", preference hints still apply (requireProvider move-to-front
+        // above still works), but the intra-bucket sort is skipped. This keeps config order
+        // while still respecting explicit provider requirements.
+        if (routeSortBy !== "config") {
         const preferSet = new Set(effectiveHints.preferProviders);
         const preferSort = (a: RouteTarget, b: RouteTarget): number => {
           const aPref = preferSet.has(a.provider) ? 0 : 1;
@@ -1248,6 +1260,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         partition.promoted.sort(preferSort);
         partition.normal.sort(preferSort);
         // Leave demoted as-is (don't promote stressed providers via preference)
+        }
       }
       const orderedAudited = [...partition.promoted, ...partition.normal, ...partition.demoted];
       const pipelineTargets = orderedAudited.length > 0
