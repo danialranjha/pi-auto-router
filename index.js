@@ -10,50 +10,70 @@ const lastAttemptByRoute = new Map();
 const activeTargetByRoute = new Map();
 let latestUiContext;
 const DEFAULT_ROUTES = {
-    "subscription-premium": {
-        name: "Subscription Premium Router",
+    "subscription-reasoning": {
+        name: "Reasoning & Agentic Router",
         reasoning: true,
         input: ["text", "image"],
+        contextWindow: 200000,
+        maxTokens: 128000,
         targets: [
-            { provider: "claude-agent-sdk", modelId: "claude-opus-4-8", label: "Claude Opus 4.8 via Claude Code" },
-            { provider: "openai-codex", modelId: "gpt-5.5", authProvider: "openai-codex", label: "GPT-5.5" },
-            { provider: "google", modelId: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview via API key", billing: "per-token" },
-            { provider: "claude-agent-sdk", modelId: "claude-opus-4-7", label: "Claude Opus 4.7 via Claude Code" },
-            { provider: "ollama", modelId: "glm-5.1:cloud", label: "GLM-5.1 via Ollama Cloud Subscription" }
+            { provider: "moonshotai", modelId: "kimi-k3", authProvider: "moonshotai", label: "L1: Kimi K3" },
+            { provider: "deepseek", modelId: "deepseek-v4-pro", authProvider: "deepseek", label: "L2: DeepSeek V4 Pro" },
+            { provider: "openai-codex", modelId: "gpt-5.6-sol", authProvider: "openai-codex", label: "L3: GPT-5.6 Sol" },
+            { provider: "google", modelId: "gemini-3.1-pro-preview", label: "L4: Gemini 3.1 Pro Preview", billing: "per-token" },
+            { provider: "ollama", modelId: "glm-5.1:cloud", label: "L5: GLM-5.1 (Ollama Cloud)" }
         ]
     },
-    "subscription-coding": {
-        name: "Subscription Coding Router",
+    "subscription-swe": {
+        name: "Software Engineering Router",
         reasoning: true,
         input: ["text", "image"],
+        contextWindow: 200000,
+        maxTokens: 128000,
         targets: [
-            { provider: "claude-agent-sdk", modelId: "claude-opus-4-8", label: "Claude Opus 4.8 via Claude Code" },
-            { provider: "openai-codex", modelId: "gpt-5.5", authProvider: "openai-codex", label: "GPT-5.5" },
-            { provider: "google", modelId: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview via API key", billing: "per-token" },
-            { provider: "claude-agent-sdk", modelId: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 via Claude Code" },
-            { provider: "ollama", modelId: "glm-5.1:cloud", label: "GLM-5.1 via Ollama Cloud Subscription" }
+            { provider: "moonshotai", modelId: "kimi-k3", authProvider: "moonshotai", label: "L1: Kimi K3" },
+            { provider: "deepseek", modelId: "deepseek-v4-pro", authProvider: "deepseek", label: "L2: DeepSeek V4 Pro" },
+            { provider: "openai-codex", modelId: "gpt-5.6-sol", authProvider: "openai-codex", label: "L3: GPT-5.6 Sol" },
+            { provider: "google", modelId: "gemini-3.1-pro-preview", label: "L4: Gemini 3.1 Pro Preview", billing: "per-token" },
+            { provider: "deepseek", modelId: "deepseek-v4-flash", authProvider: "deepseek", label: "L5: DeepSeek V4 Flash" },
+            { provider: "ollama", modelId: "glm-5.1:cloud", label: "L6: GLM-5.1 (Ollama Cloud)" }
+        ]
+    },
+    "subscription-economy": {
+        name: "Economy Router",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 128000,
+        maxTokens: 65536,
+        targets: [
+            { provider: "deepseek", modelId: "deepseek-v4-flash", authProvider: "deepseek", label: "L1: DeepSeek V4 Flash" },
+            { provider: "google", modelId: "gemini-3.6-flash", label: "L2: Gemini 3.6 Flash", billing: "per-token" },
+            { provider: "ollama", modelId: "glm-5.1:cloud", label: "L3: GLM-5.1 (Ollama Cloud)" },
+            { provider: "openai-codex", modelId: "gpt-5.4-mini", authProvider: "openai-codex", label: "L4: GPT-5.4 Mini" }
         ]
     },
     "subscription-fast": {
-        name: "Subscription Fast Router",
+        name: "Fast & Everyday Router",
         reasoning: false,
         input: ["text", "image"],
+        contextWindow: 64000,
+        maxTokens: 16384,
         targets: [
-            { provider: "google", modelId: "gemini-3.5-flash", label: "Gemini 3.5 Flash via API key", billing: "per-token" },
-            { provider: "claude-agent-sdk", modelId: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 via Claude Code" },
-            { provider: "openai-codex", modelId: "gpt-5.4-mini", authProvider: "openai-codex", label: "GPT-5.4 Mini" },
-            { provider: "openai-codex", modelId: "gpt-5.2-codex", authProvider: "openai-codex", label: "GPT-5.2 Codex" },
-            { provider: "ollama", modelId: "glm-5.1:cloud", label: "GLM-5.1 via Ollama Cloud Subscription" }
+            { provider: "google", modelId: "gemini-3.6-flash", label: "L1: Gemini 3.6 Flash", billing: "per-token" },
+            { provider: "deepseek", modelId: "deepseek-v4-flash", authProvider: "deepseek", label: "L2: DeepSeek V4 Flash" },
+            { provider: "openai-codex", modelId: "gpt-5.4-mini", authProvider: "openai-codex", label: "L3: GPT-5.4 Mini" }
         ]
     }
 };
 const DEFAULT_ALIASES = {
-    premium: ["auto-router/subscription-premium"],
-    coding: ["auto-router/subscription-coding"],
+    reasoning: ["auto-router/subscription-reasoning"],
+    swe: ["auto-router/subscription-swe"],
+    economy: ["auto-router/subscription-economy"],
     fast: ["auto-router/subscription-fast"],
-    claude: ["claude-agent-sdk/claude-opus-4-8", "claude-agent-sdk/claude-opus-4-7", "claude-agent-sdk/claude-sonnet-4-6"],
-    gemini: ["google/gemini-3.1-pro-preview", "google/gemini-3.5-flash"],
-    codex: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4", "openai-codex/gpt-5.4-mini"],
+    gemini: ["google/gemini-3.1-pro-preview", "google/gemini-3.6-flash"],
+    deepseek: ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"],
+    codex: ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.4-mini"],
+    kimi: ["moonshotai/kimi-k3"],
     glm: ["ollama/glm-5.1:cloud"]
 };
 let routesCache = DEFAULT_ROUTES;
@@ -186,11 +206,12 @@ function getInnerModel(target) {
         const anthropicBase = getModel("anthropic", target.modelId);
         if (!anthropicBase)
             throw new Error(`Configured route target not found: anthropic/${target.modelId}`);
+        // claude-agent-sdk is no longer a registered API provider.
+        // Resolve through anthropic but keep provider name for display.
+        // Do NOT override api or baseUrl — use the real underlying API.
         return {
             ...anthropicBase,
             provider: "claude-agent-sdk",
-            api: "claude-agent-sdk",
-            baseUrl: "claude-agent-sdk",
         };
     }
     const model = getModel(target.provider, target.modelId);

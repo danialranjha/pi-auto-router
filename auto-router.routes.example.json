@@ -2,13 +2,12 @@
   "_comment_policyRules": "Add a 'policyRules' array to configure routing strategy. Available types: force-tier, prefer-provider, exclude-provider, force-billing, force-constraint. Optional fields: routeId (scope to one route), afterTime/beforeTime/daysOfWeek (time-of-day conditions).",
   "_example_policyRules": [
     { "name": "force-reasoning-for-code", "type": "force-tier", "tier": "reasoning", "priority": 1, "condition": { "intent": "code" } },
-    { "name": "prefer-claude", "type": "prefer-provider", "provider": "claude-agent-sdk", "priority": 10 },
     { "name": "exclude-deepseek-creative", "type": "exclude-provider", "provider": "deepseek", "priority": 1, "condition": { "intent": "creative" } },
     { "name": "per-token-for-large", "type": "force-billing", "billing": "per-token", "priority": 1, "condition": { "estimatedTokensMin": 10000 } },
     { "name": "require-vision", "type": "force-constraint", "constraint": { "vision": true }, "priority": 1 },
-    { "name": "block-claude-after-7pm", "type": "exclude-provider", "provider": "claude-agent-sdk", "afterTime": "19:00", "routeId": "subscription-reasoning" },
     { "name": "weekend-economy", "type": "force-tier", "tier": "economy", "daysOfWeek": [0, 6] }
   ],
+  "_comment_providers": "Claude (claude-agent-sdk) and NVIDIA NIM removed 2026-07-31 due to reliability issues. Active: moonshotai (Kimi API key), deepseek (API key), openai-codex (subscription), google (API key), ollama (GLM). Re-add Claude/NVIDIA when stable.",
   "routes": {
     "subscription-reasoning": {
       "name": "Reasoning & Agentic Router",
@@ -18,21 +17,22 @@
       "maxTokens": 128000,
       "targets": [
         {
-          "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-8",
-          "label": "L1: Claude Opus 4.8 (Frontier)"
+          "provider": "moonshotai",
+          "modelId": "kimi-k3",
+          "authProvider": "moonshotai",
+          "label": "L1: Kimi K3 (79.2 LiveBench #2 overall, #1 coding arena — 2.8T open-weight)"
         },
         {
           "provider": "deepseek",
           "modelId": "deepseek-v4-pro",
           "authProvider": "deepseek",
-          "label": "L2: DeepSeek V4 Pro Reasoner (Direct API)"
+          "label": "L2: DeepSeek V4 Pro (93.5% LiveCodeBench — algorithmic coding leader)"
         },
         {
           "provider": "openai-codex",
-          "modelId": "gpt-5.5",
+          "modelId": "gpt-5.6-sol",
           "authProvider": "openai-codex",
-          "label": "L3: GPT-5.5"
+          "label": "L3: GPT-5.6 Sol (OpenAI flagship — 78.3 Coding Index)"
         },
         {
           "provider": "google",
@@ -43,7 +43,7 @@
         {
           "provider": "ollama",
           "modelId": "glm-5.1:cloud",
-          "label": "L5: GLM-5.1 (Ollama Cloud Last Resort)"
+          "label": "L5: GLM-5.1 (Ollama Cloud)"
         }
       ]
     },
@@ -55,21 +55,22 @@
       "maxTokens": 128000,
       "targets": [
         {
-          "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-8",
-          "label": "L1: Claude Opus 4.8 (Top SWE)"
+          "provider": "moonshotai",
+          "modelId": "kimi-k3",
+          "authProvider": "moonshotai",
+          "label": "L1: Kimi K3 (#1 Frontend Code Arena, 79.2 LiveBench — open-weight coding leader)"
         },
         {
           "provider": "deepseek",
           "modelId": "deepseek-v4-pro",
           "authProvider": "deepseek",
-          "label": "L2: DeepSeek V4 Pro Coder (Direct API)"
+          "label": "L2: DeepSeek V4 Pro (93.5% LiveCodeBench — algorithmic specialist)"
         },
         {
           "provider": "openai-codex",
-          "modelId": "gpt-5.5",
+          "modelId": "gpt-5.6-sol",
           "authProvider": "openai-codex",
-          "label": "L3: GPT-5.5 (Alternative SOTA)"
+          "label": "L3: GPT-5.6 Sol (Alternative SOTA)"
         },
         {
           "provider": "google",
@@ -78,26 +79,15 @@
           "billing": "per-token"
         },
         {
-          "provider": "ollama",
-          "modelId": "glm-5.1:cloud",
-          "label": "L5: GLM-5.1 (Ollama Cloud)"
-        },
-        {
-          "provider": "nvidia",
-          "modelId": "minimaxai/minimax-m2.7",
-          "authProvider": "nvidia",
-          "label": "L6: MiniMax M2.7 (NVIDIA NIM)"
-        },
-        {
-          "provider": "claude-agent-sdk",
-          "modelId": "claude-sonnet-4-6",
-          "label": "L7: Claude Sonnet 4.6 (Efficiency Fallback)"
-        },
-        {
           "provider": "deepseek",
           "modelId": "deepseek-v4-flash",
           "authProvider": "deepseek",
-          "label": "L8: DeepSeek V4 Chat (High Throughput)"
+          "label": "L5: DeepSeek V4 Flash ($0.10/$0.20 — high throughput)"
+        },
+        {
+          "provider": "ollama",
+          "modelId": "glm-5.1:cloud",
+          "label": "L6: GLM-5.1 (Ollama Cloud)"
         }
       ]
     },
@@ -111,25 +101,25 @@
         {
           "provider": "google",
           "modelId": "gemini-3.1-pro-preview",
-          "label": "L1: Gemini 3.1 Pro Preview (API Key Long Context)",
+          "label": "L1: Gemini 3.1 Pro Preview (API Key — 1M Context)",
           "billing": "per-token"
         },
         {
-          "provider": "claude-agent-sdk",
-          "modelId": "claude-opus-4-8",
-          "label": "L2: Claude Opus 4.8 (1M Context)"
-        },
-        {
-          "provider": "nvidia",
-          "modelId": "z-ai/glm-5.1",
-          "authProvider": "nvidia",
-          "label": "L3: GLM 5.1 (1M Context NVIDIA)"
+          "provider": "moonshotai",
+          "modelId": "kimi-k3",
+          "authProvider": "moonshotai",
+          "label": "L2: Kimi K3 (1M context, 79.2 LiveBench — research reasoning)"
         },
         {
           "provider": "deepseek",
           "modelId": "deepseek-v4-flash",
           "authProvider": "deepseek",
-          "label": "L4: DeepSeek V4 (1M Context Direct)"
+          "label": "L3: DeepSeek V4 Flash (1M Context Direct)"
+        },
+        {
+          "provider": "ollama",
+          "modelId": "glm-5.1:cloud",
+          "label": "L4: GLM-5.1 (Ollama Cloud)"
         }
       ]
     },
@@ -144,24 +134,24 @@
           "provider": "deepseek",
           "modelId": "deepseek-v4-flash",
           "authProvider": "deepseek",
-          "label": "L1: DeepSeek V4 Chat (Direct API - Cheap)"
-        },
-        {
-          "provider": "nvidia",
-          "modelId": "z-ai/glm-5.1",
-          "authProvider": "nvidia",
-          "label": "L2: GLM 5.1 (NVIDIA NIM)"
+          "label": "L1: DeepSeek V4 Flash (Direct API — $0.10/$0.20)"
         },
         {
           "provider": "google",
-          "modelId": "gemini-3.5-flash",
-          "label": "L3: Gemini 3.5 Flash (API Key Fast/Cheap)",
+          "modelId": "gemini-3.6-flash",
+          "label": "L2: Gemini 3.6 Flash (API Key Fast/Cheap)",
           "billing": "per-token"
         },
         {
-          "provider": "claude-agent-sdk",
-          "modelId": "claude-sonnet-4-6",
-          "label": "L4: Claude Sonnet 4.6 (Sub Fallback)"
+          "provider": "ollama",
+          "modelId": "glm-5.1:cloud",
+          "label": "L3: GLM-5.1 (Ollama Cloud)"
+        },
+        {
+          "provider": "openai-codex",
+          "modelId": "gpt-5.4-mini",
+          "authProvider": "openai-codex",
+          "label": "L4: GPT-5.4 Mini (Codex Fallback)"
         }
       ]
     },
@@ -174,26 +164,21 @@
       "targets": [
         {
           "provider": "google",
-          "modelId": "gemini-3.5-flash",
-          "label": "L1: Gemini 3.5 Flash (API Key)",
+          "modelId": "gemini-3.6-flash",
+          "label": "L1: Gemini 3.6 Flash (API Key)",
           "billing": "per-token"
-        },
-        {
-          "provider": "claude-agent-sdk",
-          "modelId": "claude-sonnet-4-6",
-          "label": "L2: Claude Sonnet 4.6"
         },
         {
           "provider": "deepseek",
           "modelId": "deepseek-v4-flash",
           "authProvider": "deepseek",
-          "label": "L3: DeepSeek V4 Chat"
+          "label": "L2: DeepSeek V4 Flash (Direct API)"
         },
         {
           "provider": "openai-codex",
           "modelId": "gpt-5.4-mini",
           "authProvider": "openai-codex",
-          "label": "L4: GPT-5.4 Mini"
+          "label": "L3: GPT-5.4 Mini (Codex)"
         }
       ]
     }
@@ -204,22 +189,19 @@
     "long": ["auto-router/subscription-long-context"],
     "economy": ["auto-router/subscription-economy"],
     "fast": ["auto-router/subscription-fast"],
-    "claude": [
-      "claude-agent-sdk/claude-opus-4-8",
-      "claude-agent-sdk/claude-opus-4-7"
-    ],
     "gemini": [
       "google/gemini-3.1-pro-preview",
-      "google/gemini-3.5-flash"
+      "google/gemini-3.6-flash"
     ],
     "deepseek": [
       "deepseek/deepseek-v4-pro",
       "deepseek/deepseek-v4-flash"
     ],
     "codex": [
-      "openai-codex/gpt-5.5",
+      "openai-codex/gpt-5.6-sol",
       "openai-codex/gpt-5.4-mini"
     ],
+    "kimi": ["moonshotai/kimi-k3"],
     "glm": ["ollama/glm-5.1:cloud"]
   }
 }
