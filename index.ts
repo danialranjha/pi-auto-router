@@ -693,7 +693,15 @@ async function tryTarget(
   };
 
   const sanitized = sanitizeContext(context, target.provider);
-  const inner = streamSimple(innerModel, sanitized, { ...options, apiKey: token });
+  // Pass route-configured maxTokens through to the inner model.
+  // The route config is authoritative; if not set, let the model use its default.
+  const routeDef = routesCache[outerModel.id];
+  const routeMaxTokens = routeDef?.maxTokens;
+  const innerOptions: SimpleStreamOptions = { ...options, apiKey: token };
+  if (typeof routeMaxTokens === "number" && routeMaxTokens > 0) {
+    innerOptions.maxTokens = routeMaxTokens;
+  }
+  const inner = streamSimple(innerModel, sanitized, innerOptions);
   let lastMessage: AssistantMessage | undefined;
 
   try {

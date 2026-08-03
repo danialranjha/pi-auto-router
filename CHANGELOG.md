@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3
+
+### Fixed
+- **claude-agent-sdk API wrapping**: `resolveModelFromRegistry` / `getInnerModel` no longer overrides `api` and `baseUrl` to `"claude-agent-sdk"` on wrapped models. The removed API provider caused `No API provider registered for api: claude-agent-sdk` crashes on any route config that still referenced it. The underlying model's real API now passes through unchanged.
+- **Route maxTokens passthrough**: The route config's `maxTokens` value is now forwarded to the inner model via `SimpleStreamOptions.maxTokens`. Previously it was silently dropped, causing models with low native output limits (e.g. GLM-5.1 at ~16K) to truncate mid-response with `Model stopped because it reached the maximum output token limit` on large-context requests.
+- **DEFAULT_ROUTES / DEFAULT_ALIASES**: Hardcoded fallbacks no longer contain `claude-agent-sdk` or `nvidia` targets. They now match the current provider lineup: moonshotai, deepseek, openai-codex, google, ollama.
+- **Example config**: `auto-router.routes.example.json` updated to match the live config structure.
+
 ## Unreleased — Quality Signal Telemetry
 
 **Shipped:** 2026-05-07

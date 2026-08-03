@@ -323,7 +323,13 @@ async function tryTarget(outer, outerModel, target, context, options) {
         buffered.length = 0;
         flushed = true;
     };
-    const inner = streamSimple(innerModel, context, { ...options, apiKey: token });
+    const routeDef = routesCache[outerModel.id];
+    const routeMaxTokens = routeDef?.maxTokens;
+    const innerOpts = { ...options, apiKey: token };
+    if (typeof routeMaxTokens === "number" && routeMaxTokens > 0) {
+      innerOpts.maxTokens = routeMaxTokens;
+    }
+    const inner = streamSimple(innerModel, context, innerOpts);
     let lastMessage;
     for await (const event of inner) {
         if (event.type === "done") {
