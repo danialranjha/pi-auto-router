@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Route targets with `authProvider` can now fall back to provider API-key environment variables when pi auth is missing or expired.
+- Credential resolution now accepts API keys stored in `auth.json`'s `key` field and Pi's canonical provider variables such as `GEMINI_API_KEY` and `MOONSHOT_API_KEY`.
+- Per-token targets without `authProvider` are excluded when no stored or environment provider API key is available instead of being reported as healthy.
+- Gemini example-config tests now match the configured `gemini-3.6-flash` model.
+
+### Changed
+- Credential loading, expiration checks, environment-variable resolution, and target credential checks now live in the tested `src/auth.ts` module.
+
 ## 0.2.3
 
 ### Fixed

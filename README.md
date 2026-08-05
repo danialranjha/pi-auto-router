@@ -165,7 +165,7 @@ Each route target supports:
 Use `authProvider` for providers whose OAuth/access token should be read from pi auth storage.
 Skip it for providers that authenticate internally or don’t require pi-managed tokens for the request path.
 
-For Gemini API-key routes, use your installed Gemini provider id (examples here use `google`), omit `authProvider`, set `billing` to `"per-token"`, and provide `GOOGLE_API_KEY` or `GOOGLE_KEY` in the environment.
+For Gemini API-key routes, use your installed Gemini provider id (examples here use `google`), omit `authProvider`, set `billing` to `"per-token"`, and provide Pi's canonical `GEMINI_API_KEY` environment variable. `GOOGLE_API_KEY` and `GOOGLE_KEY` remain supported for compatibility.
 
 ## Commands
 
@@ -629,6 +629,7 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | Module                    | Responsibility                                                                                       |
 | ------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `types.ts`                | Shared types: `Tier`, `RouteTarget`, `RoutingContext`, `RoutingDecision`, `RoutingHints`, `PolicyRuleConfig`, etc. |
+| `auth.ts`                 | Reads pi auth storage, rejects expired tokens, resolves provider API-key environment variables, and applies auth→environment fallback |
 | `context-analyzer.ts`     | Token estimation (`chars/4`), context classification (short/medium/long/epic), `RoutingContext` build |
 | `shortcut-parser.ts`      | Parses `@reasoning`/`@swe`/`@long`/`@vision`/`@fast` from prompts; strips the token before dispatch  |
 | `constraint-solver.ts`    | Filters candidates by capability, cooldown, health, circuit breaker state, and tier-derived requirements |

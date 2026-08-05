@@ -1,4 +1,5 @@
 import type { RouteTarget, RoutingHints } from "./types.ts";
+export { hasUsableTargetCredentials, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv } from "./auth.ts";
 
 /** Parse a "provider/modelId" spec string. Returns null for invalid input. */
 export function parseModelSpec(spec: string): { provider: string; modelId: string } | null {
@@ -107,22 +108,6 @@ export function normalizeModelToken(value: string): string {
 export function findCaseInsensitiveKey<T>(record: Record<string, T>, needle: string): string | undefined {
   const normalized = String(needle ?? "").toLowerCase();
   return Object.keys(record).find((key) => String(key ?? "").toLowerCase() === normalized);
-}
-
-/** Env var candidate names for a given provider (e.g. "ollama" → OLLAMA_API_KEY, OLLAMA_KEY). */
-export function providerApiKeyEnvVars(provider: string): string[] {
-  const upper = provider.toUpperCase();
-  const dashed = provider.replace(/-/g, "_").toUpperCase();
-  return [`${upper}_API_KEY`, `${upper}_KEY`, `${dashed}_API_KEY`];
-}
-
-/** Resolve an API key from environment variables for a provider. Returns undefined if none set. */
-export function resolveProviderApiKeyFromEnv(provider: string): string | undefined {
-  for (const name of providerApiKeyEnvVars(provider)) {
-    const val = process.env[name];
-    if (val) return val;
-  }
-  return undefined;
 }
 
 /** Model descriptor with cost info (mirrors Model<Api> fields used for display). */
@@ -249,29 +234,6 @@ export function getTargetKey(target: { provider?: string; modelId?: string } | n
   if (!target) return "unknown/unknown";
   const targetKey = `${target.provider || "unknown"}/${target.modelId || "unknown"}`;
   return routeId ? `${routeId}:${targetKey}` : targetKey;
-}
-
-/**
- * Determine whether a target has usable credentials available right now.
- * - authProvider targets require a non-expired access token in auth data
- * - per-token targets without authProvider require an API key env var
- * - subscription targets without authProvider are treated as internally authenticated
- */
-export function hasUsableTargetCredentials(
-  target: Pick<RouteTarget, "provider" | "authProvider" | "billing">,
-  auth: Record<string, { access?: string; expires?: number }>,
-  nowMs = Date.now(),
-  resolveEnvKey: (provider: string) => string | undefined = resolveProviderApiKeyFromEnv,
-): boolean {
-  if (target.authProvider) {
-    const entry = auth[target.authProvider];
-    if (!entry?.access) return false;
-    return typeof entry.expires !== "number" || entry.expires > nowMs;
-  }
-  if (target.billing === "per-token") {
-    return Boolean(resolveEnvKey(target.provider));
-  }
-  return true;
 }
 
 /**

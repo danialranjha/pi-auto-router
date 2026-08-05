@@ -27,7 +27,8 @@ import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { buildRatingFromCompletedDecision, getMostRecentCompletedDecision, rememberCompletedDecision, type CompletedDecisionFeedbackContext } from "./src/rating-attribution.ts";
 import { PolicyEngine, buildStrategyRules, mergeHints, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, resolveProviderApiKeyFromEnv, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "./src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "./src/display.ts";
+import { hasUsableTargetCredentials, readAuthFile, resolveTargetApiKey } from "./src/auth.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow, supportsProviderBalance } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -186,22 +187,19 @@ async function refreshBalances(): Promise<void> {
   balanceFetchErrors = {};
   if (perToken.length === 0) return;
 
-  const auth = readAuth();
+  const auth = readAuthFile(AUTH_PATH);
   const providersWithKeys = perToken
     .filter((p) => supportsProviderBalance(p.provider, p.balanceEndpoint))
     .filter((p) => {
       const authKey = p.authProvider ?? p.provider;
-      const entry = auth[authKey];
-      if (entry?.access) return true;
-      // Fall back to environment variables
-      const envKey = resolveProviderApiKeyFromEnv(p.provider);
-      if (envKey) return true;
+      const apiKey = resolveTargetApiKey({ provider: p.provider, authProvider: authKey }, auth);
+      if (apiKey) return true;
       balanceFetchErrors[p.provider] = `no API key in auth.json (checked "${authKey}") or env`;
       return false;
     })
     .map((p) => ({
       provider: p.provider,
-      apiKey: (p.authProvider ? auth[p.authProvider]?.access : auth[p.provider]?.access) ?? resolveProviderApiKeyFromEnv(p.provider)!,
+      apiKey: resolveTargetApiKey({ provider: p.provider, authProvider: p.authProvider ?? p.provider }, auth)!,
       balanceEndpoint: p.balanceEndpoint,
     }));
 
@@ -369,22 +367,6 @@ function getRouteName(modelId: string): string {
 
 function prettyRouteName(routeId: string): string {
   return routesCache[routeId]?.name ?? routeId;
-}
-
-function readAuth(): Record<string, { access?: string; expires?: number }> {
-  try {
-    return JSON.parse(readFileSync(AUTH_PATH, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-function getAccessToken(authProvider: string): string | undefined {
-  const auth = readAuth();
-  const entry = auth[authProvider];
-  if (!entry?.access) return undefined;
-  if (typeof entry.expires === "number" && entry.expires <= Date.now()) return undefined;
-  return entry.access;
 }
 
 // getTargetKey is imported from ./src/display.ts
@@ -605,10 +587,10 @@ function putOnCooldown(target: RouteTarget, reason: string, routeId?: string) {
 
 function getHealthyTargets(routeId: string): RouteTarget[] {
   const now = Date.now();
+  const auth = readAuthFile(AUTH_PATH);
   return (routesCache[routeId]?.targets ?? []).filter((target) => {
     if (!target) return false;
-    const token = target.authProvider ? getAccessToken(target.authProvider) : "builtin";
-    if (!token) return false;
+    if (!hasUsableTargetCredentials(target, auth, now)) return false;
     const cooldown = cooldowns.get(getTargetKey(target, routeId));
     if (cooldown && cooldown.until > now) return false;
     // Circuit breaker: skip providers with an open circuit
@@ -660,12 +642,11 @@ async function tryTarget(
 ): Promise<{ success: boolean; retryableFailure?: string; terminalError?: AssistantMessage; lastMessage?: AssistantMessage; ttftMs?: number }> {
   activeTargetByRoute.set(outerModel.id, describeTarget(target));
   refreshStatus(outerModel.id);
-  let token = target.authProvider ? getAccessToken(target.authProvider) : undefined;
-  // Fall back to environment variables for providers without authProvider (e.g. ollama)
-  if (!token) token = resolveProviderApiKeyFromEnv(target.provider);
-  
-  if (target.authProvider && !token) {
-    const message = `${target.label}: no valid subscription token`;
+  const auth = readAuthFile(AUTH_PATH);
+  const token = resolveTargetApiKey(target, auth);
+
+  if (!hasUsableTargetCredentials(target, auth)) {
+    const message = `${target.label}: no valid credentials in auth.json or provider environment variables`;
     putOnCooldown(target, message, outerModel.id);
     return { success: false, retryableFailure: message };
   }

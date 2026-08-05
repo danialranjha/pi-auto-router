@@ -90,6 +90,13 @@ function parseModelSpec(spec) {
         return null;
     return { provider, modelId };
 }
+function resolveProviderApiKeyFromEnv(provider) {
+    const upper = provider.toUpperCase();
+    const names = [`${upper}_API_KEY`, `${upper}_KEY`];
+    for (const name of names) if (process.env[name]) return process.env[name];
+    return void 0;
+}
+
 function getRouteName(modelId) {
     return String(modelId ?? "").replace(/^subscription-/, "");
 }
@@ -262,8 +269,10 @@ function getHealthyTargets(routeId) {
     return (routesCache[routeId]?.targets ?? []).filter((target) => {
         if (!target)
             return false;
-        const token = target.authProvider ? getAccessToken(target.authProvider) : "builtin";
-        if (!token)
+        const hasAuth = target.authProvider
+            ? (getAccessToken(target.authProvider) || resolveProviderApiKeyFromEnv(target.provider))
+            : "builtin";
+        if (!hasAuth)
             return false;
         const cooldown = cooldowns.get(getTargetKey(target));
         return !cooldown || cooldown.until <= now;
@@ -306,7 +315,8 @@ function buildCombinedError(model, routeId, errors) {
 async function tryTarget(outer, outerModel, target, context, options) {
     activeTargetByRoute.set(outerModel.id, describeTarget(target));
     refreshStatus(outerModel.id);
-    const token = target.authProvider ? getAccessToken(target.authProvider) : undefined;
+    let token = target.authProvider ? getAccessToken(target.authProvider) : void 0;
+    if (!token) token = resolveProviderApiKeyFromEnv(target.provider);
     if (target.authProvider && !token) {
         return { success: false, retryableFailure: `${target.label}: no valid subscription token` };
     }

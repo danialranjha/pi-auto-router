@@ -323,40 +323,32 @@ describe("providerApiKeyEnvVars", () => {
 
 describe("resolveProviderApiKeyFromEnv", () => {
   it("returns undefined for providers with no env var set", () => {
-    assert.equal(resolveProviderApiKeyFromEnv("nonexistent_provider_xyz"), undefined);
+    assert.equal(resolveProviderApiKeyFromEnv("nonexistent_provider_xyz", {}), undefined);
   });
 
   it("returns key from OLLAMA_API_KEY env var", () => {
-    const original = process.env.OLLAMA_API_KEY;
-    process.env.OLLAMA_API_KEY = "test-ollama-key-123";
-    try {
-      assert.equal(resolveProviderApiKeyFromEnv("ollama"), "test-ollama-key-123");
-    } finally {
-      if (original !== undefined) process.env.OLLAMA_API_KEY = original;
-      else delete process.env.OLLAMA_API_KEY;
-    }
+    assert.equal(
+      resolveProviderApiKeyFromEnv("ollama", { OLLAMA_API_KEY: "test-ollama-key-123" }),
+      "test-ollama-key-123",
+    );
   });
 
   it("returns key from DEEPSEEK_API_KEY env var", () => {
-    const original = process.env.DEEPSEEK_API_KEY;
-    process.env.DEEPSEEK_API_KEY = "sk-test-deepseek";
-    try {
-      assert.equal(resolveProviderApiKeyFromEnv("deepseek"), "sk-test-deepseek");
-    } finally {
-      if (original !== undefined) process.env.DEEPSEEK_API_KEY = original;
-      else delete process.env.DEEPSEEK_API_KEY;
-    }
+    assert.equal(
+      resolveProviderApiKeyFromEnv("deepseek", { DEEPSEEK_API_KEY: "sk-test-deepseek" }),
+      "sk-test-deepseek",
+    );
   });
 
-  it("returns key from GOOGLE_API_KEY env var", () => {
-    const original = process.env.GOOGLE_API_KEY;
-    process.env.GOOGLE_API_KEY = "sk-test-google";
-    try {
-      assert.equal(resolveProviderApiKeyFromEnv("google"), "sk-test-google");
-    } finally {
-      if (original !== undefined) process.env.GOOGLE_API_KEY = original;
-      else delete process.env.GOOGLE_API_KEY;
-    }
+  it("supports canonical and compatibility Google env vars", () => {
+    assert.equal(
+      resolveProviderApiKeyFromEnv("google", { GEMINI_API_KEY: "gemini-key" }),
+      "gemini-key",
+    );
+    assert.equal(
+      resolveProviderApiKeyFromEnv("google", { GOOGLE_API_KEY: "google-key" }),
+      "google-key",
+    );
   });
 });
 
