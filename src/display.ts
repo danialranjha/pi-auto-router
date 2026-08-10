@@ -79,12 +79,31 @@ export function parseClockResetMs(message: any): number | undefined {
   return ms > 0 ? ms : undefined;
 }
 
+/** Parse an absolute reset time like "reset at 08-14 09:18:00 UTC" and return ms until that time. */
+function parseAbsoluteResetMs(message: any): number | undefined {
+  const text = String(message ?? "");
+  const match = text.match(/reset at (\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?: UTC)?/i);
+  if (!match) return undefined;
+  const month = Number(match[1]) - 1;
+  const day = Number(match[2]);
+  const hour = Number(match[3]);
+  const minute = Number(match[4]);
+  const second = Number(match[5]);
+  if (!Number.isFinite(month) || !Number.isFinite(day) || !Number.isFinite(hour) || !Number.isFinite(minute) || !Number.isFinite(second)) return undefined;
+  const now = Date.now();
+  const target = Date.UTC(new Date(now).getUTCFullYear(), month, day, hour, minute, second);
+  const ms = target - now;
+  return ms > 0 ? ms : 0;
+}
+
 /** Determine cooldown duration in ms based on the error message content. */
 export function getCooldownMs(message: any): number {
   const explicitResetMs = parseResetAfterMs(message);
   if (explicitResetMs) return explicitResetMs + 5_000;
   const clockResetMs = parseClockResetMs(message);
   if (clockResetMs) return clockResetMs;
+  const absoluteResetMs = parseAbsoluteResetMs(message);
+  if (absoluteResetMs !== undefined) return absoluteResetMs + 5_000;
 
   const text = String(message ?? "").toLowerCase();
   if (text.includes("429") || text.includes("rate limit") || text.includes("too many requests") || text.includes("throttled")) return 2 * 60_000;
