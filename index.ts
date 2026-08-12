@@ -25,6 +25,7 @@ import { LatencyTracker } from "./src/latency-tracker.ts";
 import { compareTargets } from "./src/target-ranker.ts";
 import { orderCandidateBuckets, parseRoutingOrder, type RoutingOrder } from "./src/routing-order.ts";
 import { CacheOptimizerRouting, applyCacheOptimizerHints } from "./src/cache-optimizer-routing.ts";
+import { getVirtualThinkingLevelMap } from "./src/virtual-model.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { buildRatingFromCompletedDecision, getMostRecentCompletedDecision, rememberCompletedDecision, type CompletedDecisionFeedbackContext } from "./src/rating-attribution.ts";
@@ -2030,14 +2031,16 @@ function rebuildProvider(pi: ExtensionAPI) {
     api: "auto-router-api",
     models: Object.entries(routesCache).map(([routeId, route]) => {
       const limits = getPrimaryModelLimitsFn(route);
+      const reasoning = route.reasoning !== false;
       return {
         id: routeId,
         name: route.name ?? routeId,
-        reasoning: route.reasoning !== false,
+        reasoning,
         input: route.input ?? ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: limits.contextWindow,
         maxTokens: limits.maxTokens,
+        thinkingLevelMap: getVirtualThinkingLevelMap(reasoning),
       };
     }),
     streamSimple: streamAutoRouter,
