@@ -24,6 +24,7 @@ import { getProviderHealthCache } from "./src/health-check.ts";
 import { LatencyTracker } from "./src/latency-tracker.ts";
 import { compareTargets } from "./src/target-ranker.ts";
 import { orderCandidateBuckets, parseRoutingOrder, type RoutingOrder } from "./src/routing-order.ts";
+import { CacheOptimizerRouting, applyCacheOptimizerHints } from "./src/cache-optimizer-routing.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { buildRatingFromCompletedDecision, getMostRecentCompletedDecision, rememberCompletedDecision, type CompletedDecisionFeedbackContext } from "./src/rating-attribution.ts";
@@ -91,6 +92,7 @@ const policyEngine = new PolicyEngine();
 const circuitBreaker = new CircuitBreaker();
 const decisionLogger = new DecisionLogger();
 const routerEventLogger = new RouterEventLogger();
+const cacheOptimizerRouting = new CacheOptimizerRouting(PROVIDER_ID, (routeId) => routesCache[routeId]?.targets ?? []);
 const balanceCache = new Map<string, BalanceState>();
 let balanceLastRefreshAt = 0;
 let balanceFetchErrors: Record<string, string> = {};
@@ -648,7 +650,8 @@ async function tryTarget(
   outerModel: Model<Api>,
   target: RouteTarget,
   context: Context,
-  options?: SimpleStreamOptions,
+  options: SimpleStreamOptions | undefined,
+  routingScope: { sessionId?: string; requestId: string },
 ): Promise<{ success: boolean; retryableFailure?: string; terminalError?: AssistantMessage; lastMessage?: AssistantMessage; ttftMs?: number }> {
   activeTargetByRoute.set(outerModel.id, describeTarget(target));
   refreshStatus(outerModel.id);
@@ -683,6 +686,7 @@ async function tryTarget(
     flushed = true;
   };
 
+  cacheOptimizerRouting.publish(outerModel.id, target, "trying", { ...routingScope, api: innerModel.api });
   const sanitized = sanitizeContext(context, target.provider);
   // Pass route-configured maxTokens through to the inner model.
   // The route config is authoritative; if not set, let the model use its default.
@@ -692,7 +696,8 @@ async function tryTarget(
   if (typeof routeMaxTokens === "number" && routeMaxTokens > 0) {
     innerOptions.maxTokens = routeMaxTokens;
   }
-  const inner = streamSimple(innerModel, sanitized, innerOptions);
+  const optimized = applyCacheOptimizerHints(sanitized, innerOptions, outerModel.id, innerModel, routingScope.sessionId);
+  const inner = streamSimple(innerModel, optimized.context, optimized.options);
   let lastMessage: AssistantMessage | undefined;
 
   try {
@@ -1453,7 +1458,9 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         candidates: decision.metadata.candidateTrace ?? [],
       });
 
+      const routingScope = { sessionId: options?.sessionId ?? activeSessionId, requestId };
       for (const [attemptIndex, target] of targets.entries()) {
+        cacheOptimizerRouting.publish(routeId, target, "planned", routingScope);
         lastAttemptByRoute.set(routeId, target.label);
         emitRouterEvent("routing.attempt", { requestId, conversationId, routeId }, {
           index: attemptIndex + 1,
@@ -1462,8 +1469,9 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           label: target.label,
         });
         const t0 = Date.now();
-        const result = await tryTarget(outer, model, target, context, options);
+        const result = await tryTarget(outer, model, target, context, options, routingScope);
         if (result.success) {
+          cacheOptimizerRouting.publish(routeId, target, "success", routingScope);
           const elapsed = Date.now() - t0;
           const usageMetrics = extractUsageMetrics(result.lastMessage?.usage);
           finalOutcome = "success";
@@ -1583,6 +1591,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           outer.end();
           return;
         }
+        cacheOptimizerRouting.publish(routeId, target, "failed", routingScope);
         if (result.retryableFailure) {
           const elapsed = Date.now() - t0;
           circuitBreaker.recordFailure(target.provider);
@@ -2037,6 +2046,7 @@ function rebuildProvider(pi: ExtensionAPI) {
 
 export default function (pi: ExtensionAPI) {
   rebuildProvider(pi);
+  cacheOptimizerRouting.register();
   triggerStartupUviRefresh();
 
   const updateUi = (ctx: any) => {
@@ -2047,11 +2057,14 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     activeSessionId = ctx.sessionManager.getSessionId();
+    cacheOptimizerRouting.register();
     updateUi(ctx);
     triggerStartupUviRefresh();
   });
   pi.on("session_shutdown", async () => {
     // Session-bound contexts become stale immediately after this hook returns.
+    cacheOptimizerRouting.clearSession(activeSessionId);
+    cacheOptimizerRouting.unregisterAdapter();
     latestUiContext = undefined;
     activeSessionId = undefined;
   });
