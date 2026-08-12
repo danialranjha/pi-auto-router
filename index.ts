@@ -17,7 +17,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildRoutingContext } from "./src/context-analyzer.ts";
 import { DEFAULT_SHORTCUTS, listShortcuts, parseShortcut } from "./src/shortcut-parser.ts";
 import { inferRequirements, solveConstraints, tierToRequirements, type CapabilityMap, type ConstraintRequirements } from "./src/constraint-solver.ts";
-import { BudgetTracker, todayKey } from "./src/budget-tracker.ts";
+import { BudgetTracker, monthKey, todayKey } from "./src/budget-tracker.ts";
 import { partitionAuditedCandidates } from "./src/candidate-partitioner.ts";
 import { QuotaCache, mapRouteProviderToOAuth } from "./src/quota-cache.ts";
 import { getProviderHealthCache } from "./src/health-check.ts";
@@ -41,7 +41,7 @@ import { RouterEventLogger } from "./src/router-event-logger.ts";
 import { sanitizeContext } from "./src/context-sanitizer.ts";
 import { detectValidationTrace } from "./src/validation-outcome-detector.ts";
 import { buildSweSubtaskHeuristic } from "./src/swe-subtask-heuristics.ts";
-import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, QuotaWindow, PolicyRuleConfig, DecisionAttemptLog, DecisionCandidateTrace, DecisionReasoningTrace } from "./src/types.ts";
+import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, BudgetState, QuotaWindow, PolicyRuleConfig, DecisionAttemptLog, DecisionCandidateTrace, DecisionReasoningTrace } from "./src/types.ts";
 
 const PROVIDER_ID = "auto-router";
 const AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
