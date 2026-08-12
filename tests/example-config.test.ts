@@ -5,6 +5,11 @@ import fs from "node:fs";
 const exampleConfig = JSON.parse(fs.readFileSync(new URL("../auto-router.routes.example.json", import.meta.url), "utf8"));
 
 describe("auto-router.routes.example.json", () => {
+  it("documents the shared log directory option", () => {
+    assert.equal(exampleConfig.logDir, "~/.pi/agent/extensions");
+    assert.match(exampleConfig._comment_logDir, /AUTO_ROUTER_LOG_DIR/);
+  });
+
   it("does not reference deprecated Google OAuth providers", () => {
     const text = JSON.stringify(exampleConfig);
     assert.equal(text.includes("google-antigravity"), false);

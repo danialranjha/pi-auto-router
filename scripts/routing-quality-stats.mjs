@@ -6,8 +6,9 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 
-const DEFAULT_EVENTS_PATH = path.join(homedir(), '.pi', 'agent', 'extensions', 'auto-router.events.jsonl');
-const DEFAULT_RATINGS_PATH = path.join(homedir(), '.pi', 'agent', 'extensions', 'auto-router.ratings.json');
+const DEFAULT_LOG_DIR = process.env.AUTO_ROUTER_LOG_DIR || path.join(homedir(), '.pi', 'agent', 'extensions');
+const DEFAULT_EVENTS_PATH = path.join(DEFAULT_LOG_DIR, 'auto-router.events.jsonl');
+const DEFAULT_RATINGS_PATH = path.join(DEFAULT_LOG_DIR, 'auto-router.ratings.json');
 
 function parseArgs(argv) {
   const options = {

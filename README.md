@@ -602,6 +602,19 @@ The repository ships with opinionated defaults oriented around subscription-back
 
 You should edit `~/.pi/agent/extensions/auto-router.routes.json` to match your own environment.
 
+### Log and state directory
+
+Decision logs, event logs, budget statistics, latency history, and ratings default to `~/.pi/agent/extensions/`. Set a top-level `logDir` in `auto-router.routes.json` to move them together:
+
+```json
+{
+  "logDir": "~/Library/Logs/pi-auto-router",
+  "routes": {}
+}
+```
+
+`AUTO_ROUTER_LOG_DIR` takes precedence over `logDir`. The directory is created when missing and validated before writers switch to it; an invalid or unwritable path is reported as a configuration error without modifying existing files.
+
 ### Candidate ordering
 
 Routes default to `"sortBy": "adaptive"`, which ranks targets by observed latency, estimated cost, then declared order. Set `"sortBy": "config"` on a route to retain declared target order **within each UVI bucket**. UVI and budget classification still place promoted targets before normal targets and demoted targets last.

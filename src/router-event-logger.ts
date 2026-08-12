@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
+import { getAutoRouterStoragePaths } from "./storage-paths.ts";
 
-const DEFAULT_EVENTS_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "auto-router.events.jsonl");
+const DEFAULT_EVENTS_PATH = getAutoRouterStoragePaths({ ensure: false }).events;
 
 type RouterEventEnvelope<T = Record<string, unknown>> = {
   type: string;

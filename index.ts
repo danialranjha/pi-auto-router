@@ -26,6 +26,7 @@ import { compareTargets } from "./src/target-ranker.ts";
 import { orderCandidateBuckets, parseRoutingOrder, type RoutingOrder } from "./src/routing-order.ts";
 import { CacheOptimizerRouting, applyCacheOptimizerHints } from "./src/cache-optimizer-routing.ts";
 import { getVirtualThinkingLevelMap } from "./src/virtual-model.ts";
+import { getAutoRouterStoragePaths } from "./src/storage-paths.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { buildRatingFromCompletedDecision, getMostRecentCompletedDecision, rememberCompletedDecision, type CompletedDecisionFeedbackContext } from "./src/rating-attribution.ts";
@@ -67,6 +68,7 @@ type RouteDefinition = {
 };
 
 type RoutesFile = {
+  logDir?: string;
   routes?: Record<string, RouteDefinition>;
   aliases?: Record<string, string | string[]>;
 };
@@ -85,14 +87,15 @@ const lastDecisionByRoute = new Map<string, RoutingDecision>();
 const lastShortcutByRoute = new Map<string, { shortcut: string; tier: Tier }>();
 const lastStrategyTraceByRoute = new Map<string, { rules: Array<{ name: string; matched: boolean }>; hints: RoutingDecision["reasoning"] | null }>();
 const lastBudgetWarningByRoute = new Map<string, string>();
-const budgetTracker = new BudgetTracker();
+let storagePaths = getAutoRouterStoragePaths();
+let budgetTracker = new BudgetTracker(storagePaths.stats);
 const quotaCache = new QuotaCache();
-const latencyTracker = new LatencyTracker();
-const feedbackTracker = new FeedbackTracker();
+let latencyTracker = new LatencyTracker(storagePaths.latency);
+let feedbackTracker = new FeedbackTracker(storagePaths.ratings);
 const policyEngine = new PolicyEngine();
 const circuitBreaker = new CircuitBreaker();
-const decisionLogger = new DecisionLogger();
-const routerEventLogger = new RouterEventLogger();
+let decisionLogger = new DecisionLogger(10_000, storagePaths.decisions);
+let routerEventLogger = new RouterEventLogger(storagePaths.events);
 const cacheOptimizerRouting = new CacheOptimizerRouting(PROVIDER_ID, (routeId) => routesCache[routeId]?.targets ?? []);
 const balanceCache = new Map<string, BalanceState>();
 let balanceLastRefreshAt = 0;
@@ -368,6 +371,18 @@ let routesCache: Record<string, RouteDefinition> = DEFAULT_ROUTES;
 let aliasesCache: AliasConfig = DEFAULT_ALIASES;
 let configError: string | undefined;
 
+function configureStorage(configLogDir?: unknown): void {
+  const next = getAutoRouterStoragePaths({ configLogDir });
+  if (next.directory === storagePaths.directory) return;
+  storagePaths = next;
+  budgetTracker = new BudgetTracker(next.stats);
+  latencyTracker = new LatencyTracker(next.latency);
+  feedbackTracker = new FeedbackTracker(next.ratings);
+  decisionLogger = new DecisionLogger(10_000, next.decisions);
+  routerEventLogger = new RouterEventLogger(next.events);
+  budgetReady = false;
+}
+
 function getRouteName(modelId: string): string {
   return String(modelId ?? "").replace(/^subscription-/, "");
 }
@@ -409,7 +424,10 @@ function loadRoutesConfig(): void {
   configError = undefined;
   syncQuotaProviderFilter();
 
-  if (!existsSync(ROUTES_PATH)) return;
+  if (!existsSync(ROUTES_PATH)) {
+    configureStorage(undefined);
+    return;
+  }
 
   try {
     const parsed = JSON.parse(readFileSync(ROUTES_PATH, "utf8")) as RoutesFile;
@@ -477,12 +495,14 @@ function loadRoutesConfig(): void {
       }
     }
 
+    configureStorage((parsed as Record<string, unknown>).logDir);
     routesCache = Object.keys(nextRoutes).length > 0 ? nextRoutes : DEFAULT_ROUTES;
     aliasesCache = Object.keys(nextAliases).length > 0 ? nextAliases : DEFAULT_ALIASES;
     syncQuotaProviderFilter();
     rebuildPolicyEngine();
   } catch (error) {
     configError = error instanceof Error ? error.message : String(error);
+    configureStorage(undefined);
     routesCache = DEFAULT_ROUTES;
     aliasesCache = DEFAULT_ALIASES;
     syncQuotaProviderFilter();

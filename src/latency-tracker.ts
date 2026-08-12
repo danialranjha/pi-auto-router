@@ -1,10 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import type { LatencyRecord } from "./types.ts";
+import { getAutoRouterStoragePaths } from "./storage-paths.ts";
 
-const STATS_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "auto-router.stats.json");
-const LATENCY_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "auto-router.latency.json");
+const DEFAULT_LATENCY_PATH = getAutoRouterStoragePaths({ ensure: false }).latency;
 
 /**
  * Tracks per-provider latency (time-to-first-token) for performance-based ranking.
@@ -14,11 +13,13 @@ export class LatencyTracker {
   private records = new Map<string, LatencyRecord>();
   private loaded = false;
 
+  constructor(private readonly filePath = DEFAULT_LATENCY_PATH) {}
+
   /** Load latency records from the latency file. */
   load(): void {
     if (this.loaded) return;
     try {
-      const raw = fs.readFileSync(LATENCY_PATH, "utf-8");
+      const raw = fs.readFileSync(this.filePath, "utf-8");
       const data = JSON.parse(raw);
       if (data && typeof data === "object") {
         for (const [provider, rec] of Object.entries(data)) {
@@ -79,8 +80,8 @@ export class LatencyTracker {
       for (const [provider, rec] of this.records) {
         data[provider] = rec;
       }
-      fs.mkdirSync(path.dirname(LATENCY_PATH), { recursive: true });
-      fs.writeFileSync(LATENCY_PATH, JSON.stringify(data, null, 2));
+      fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+      fs.writeFileSync(this.filePath, JSON.stringify(data, null, 2));
     } catch {
       // best-effort; don't crash if save fails
     }

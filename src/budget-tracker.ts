@@ -1,9 +1,9 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import type { BudgetState, UtilizationSnapshot } from "./types.ts";
+import { getAutoRouterStoragePaths } from "./storage-paths.ts";
 
-export const DEFAULT_STATS_PATH = join(homedir(), ".pi", "agent", "extensions", "auto-router.stats.json");
+export const DEFAULT_STATS_PATH = getAutoRouterStoragePaths({ ensure: false }).stats;
 
 export type ProviderDailyStats = {
   inputTokens: number;

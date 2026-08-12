@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import type { DecisionLogEntry } from "./types.ts";
+import { getAutoRouterStoragePaths } from "./storage-paths.ts";
 
-const DEFAULT_DECISIONS_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "auto-router.decisions.jsonl");
+const DEFAULT_DECISIONS_PATH = getAutoRouterStoragePaths({ ensure: false }).decisions;
 
 /**
  * Append-only JSONL decision logger.

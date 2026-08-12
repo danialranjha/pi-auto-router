@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
+import { getAutoRouterStoragePaths } from "./storage-paths.ts";
 
-const RATINGS_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "auto-router.ratings.json");
+const DEFAULT_RATINGS_PATH = getAutoRouterStoragePaths({ ensure: false }).ratings;
 
 export type RatingValue = "good" | "bad";
 
@@ -35,10 +35,12 @@ export class FeedbackTracker {
   private ratings: Rating[] = [];
   private loaded = false;
 
+  constructor(private readonly filePath = DEFAULT_RATINGS_PATH) {}
+
   load(): void {
     if (this.loaded) return;
     try {
-      const raw = fs.readFileSync(RATINGS_PATH, "utf-8");
+      const raw = fs.readFileSync(this.filePath, "utf-8");
       const data = JSON.parse(raw);
       if (Array.isArray(data)) {
         this.ratings = data.filter(isValidRating);
@@ -84,8 +86,8 @@ export class FeedbackTracker {
 
   save(): void {
     try {
-      fs.mkdirSync(path.dirname(RATINGS_PATH), { recursive: true });
-      fs.writeFileSync(RATINGS_PATH, JSON.stringify(this.ratings, null, 2));
+      fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+      fs.writeFileSync(this.filePath, JSON.stringify(this.ratings, null, 2));
     } catch {
       // best-effort
     }

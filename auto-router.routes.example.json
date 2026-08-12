@@ -1,4 +1,6 @@
 {
+  "_comment_logDir": "Optional. AUTO_ROUTER_LOG_DIR overrides this value. Defaults to ~/.pi/agent/extensions.",
+  "logDir": "~/.pi/agent/extensions",
   "_comment_policyRules": "Add a 'policyRules' array to configure routing strategy. Available types: force-tier, prefer-provider, exclude-provider, force-billing, force-constraint. Optional fields: routeId (scope to one route), afterTime/beforeTime/daysOfWeek (time-of-day conditions).",
   "_example_policyRules": [
     { "name": "force-reasoning-for-code", "type": "force-tier", "tier": "reasoning", "priority": 1, "condition": { "intent": "code" } },
