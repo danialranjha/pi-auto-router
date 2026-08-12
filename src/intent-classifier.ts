@@ -1,4 +1,4 @@
-import type { CodeSubtask, Message } from "./types.ts";
+import type { CodeSubtask, Message, Tier } from "./types.ts";
 
 export type IntentCategory = "code" | "creative" | "analysis" | "general";
 
@@ -269,7 +269,7 @@ function scoreCategory(
 /**
  * Map an intent category to a tier hint for routing.
  */
-export function intentToTier(category: IntentCategory): string | null {
+export function intentToTier(category: IntentCategory): Tier | null {
   switch (category) {
     case "code": return "swe";
     case "creative": return "economy";

@@ -13,9 +13,14 @@ function tempPath(): string {
 function makeEntry(overrides: Partial<DecisionLogEntry> = {}): DecisionLogEntry {
   return {
     timestamp: Date.now(),
+    requestId: "req-test",
+    conversationId: "conv-test",
     routeId: "subscription-reasoning",
     tier: "swe",
     phase: "default",
+    plannedProvider: "claude-agent-sdk",
+    plannedModelId: "claude-opus-4-6",
+    plannedTargetLabel: "Claude Opus 4.6",
     provider: "claude-agent-sdk",
     modelId: "claude-opus-4-6",
     targetLabel: "Claude Opus 4.6",

@@ -521,6 +521,11 @@ function rebuildPolicyEngine(): void {
   policyEngine.rebuildStrategyRules(allRules);
 }
 
+// The SDK types `getModel` for its known provider/model registry, but the
+// router calls it best-effort with config-provided provider/model strings and
+// falls back via try/catch. Widen the signature at this boundary only.
+const getModelLoose = getModel as unknown as (provider: string, modelId: string) => Model<Api>;
+
 function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model<Api> | undefined {
   const registry = (context as any)?.modelRegistry || latestUiContext?.modelRegistry;
   const available: Array<{ provider: string; id: string; name?: string }> =
@@ -546,12 +551,12 @@ function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model
   // Direct lookup via pi SDK
   const direct = (() => {
     try {
-      return getModel(provider, target.modelId);
+      return getModelLoose(provider, target.modelId);
     } catch {
       try {
         if (target.modelId.includes("/")) {
           const [p, m] = target.modelId.split("/");
-          return getModel(p, m);
+          return getModelLoose(p, m);
         }
       } catch {}
       return undefined;
@@ -587,7 +592,7 @@ function getPrimaryModelLimitsFn(route: RouteDefinition): { contextWindow: numbe
 
   return getPrimaryModelLimits(route, (provider, modelId) => {
     try {
-      const model = getModel(provider, modelId);
+      const model = getModelLoose(provider, modelId);
       if (model) return { contextWindow: model.contextWindow, maxTokens: model.maxTokens };
     } catch { /* SDK may throw */ }
     return undefined;
@@ -1892,7 +1897,8 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 
 function getStatusLine(routeId?: string): string {
   if (!routeId || !(routeId in routesCache)) return "auto-router idle";
-  const healthy = getHealthyTargets(routeId).map((target) => String(target?.label ?? "Unknown"));
+  const healthyTargets = getHealthyTargets(routeId);
+  const healthy = healthyTargets.map((target) => String(target?.label ?? "Unknown"));
   const activeTarget = activeTargetByRoute.get(routeId);
   const lastTarget = lastAttemptByRoute.get(routeId);
   const selectedTarget = activeTarget ?? lastTarget;
@@ -1908,7 +1914,7 @@ function getStatusLine(routeId?: string): string {
   const budgetWarning = lastBudgetWarningByRoute.get(routeId);
   const budgetText = budgetWarning ? ` | ⚠ ${budgetWarning}` : "";
   const uviText = formatUviStatusSegment();
-  const healthIssuesText = formatHealthIssuesSegment(healthy);
+  const healthIssuesText = formatHealthIssuesSegment(healthyTargets);
   const shadowText = shadowMode ? " 🔬 shadow" : "";
   const hardText = uviHardMode && quotaCache.isEnabled() ? " 🛡️ uvi-hard" : "";
   const circuitText = formatCircuitStatusSegment();
@@ -2135,7 +2141,7 @@ export default function (pi: ExtensionAPI) {
             const success = await pi.setModel(model);
             if (success) {
               updateUi(ctx);
-              ctx.ui.notify(`Switched to auto-router/${remainder}`, "success");
+              ctx.ui.notify(`Switched to auto-router/${remainder}`, "info");
             } else {
               ctx.ui.notify(`Failed to switch to auto-router/${remainder}`, "error");
             }
@@ -2157,7 +2163,7 @@ export default function (pi: ExtensionAPI) {
               const success = await pi.setModel(model);
               if (success) {
                 updateUi(ctx);
-                ctx.ui.notify(`Switched to ${spec.provider}/${spec.modelId} (via alias "${aliasKey}")`, "success");
+                ctx.ui.notify(`Switched to ${spec.provider}/${spec.modelId} (via alias "${aliasKey}")`, "info");
               } else {
                 ctx.ui.notify(`Failed to switch to ${spec.provider}/${spec.modelId}`, "error");
               }
@@ -2176,7 +2182,7 @@ export default function (pi: ExtensionAPI) {
             const success = await pi.setModel(model);
             if (success) {
               updateUi(ctx);
-              ctx.ui.notify(`Switched to ${spec.provider}/${spec.modelId}`, "success");
+              ctx.ui.notify(`Switched to ${spec.provider}/${spec.modelId}`, "info");
             } else {
               ctx.ui.notify(`Failed to switch to ${spec.provider}/${spec.modelId}`, "error");
             }
@@ -2210,7 +2216,7 @@ export default function (pi: ExtensionAPI) {
         balanceCache.clear();
         balanceFetchErrors = {};
         updateUi(ctx);
-        ctx.ui.notify("Auto-router cooldowns, decision history, and health cache reset", "success");
+        ctx.ui.notify("Auto-router cooldowns, decision history, and health cache reset", "info");
         return;
       }
 
@@ -2219,10 +2225,10 @@ export default function (pi: ExtensionAPI) {
         const action = String(actionRaw ?? "show").toLowerCase();
         if (action === "enable") {
           shadowMode = true;
-          ctx.ui.notify("Shadow mode enabled — pipeline runs but legacy ordering is used for routing", "success");
+          ctx.ui.notify("Shadow mode enabled — pipeline runs but legacy ordering is used for routing", "info");
         } else if (action === "disable") {
           shadowMode = false;
-          ctx.ui.notify("Shadow mode disabled — pipeline ordering will be used for routing", "success");
+          ctx.ui.notify("Shadow mode disabled — pipeline ordering will be used for routing", "info");
         } else if (action === "show") {
           const lines: string[] = [`Shadow mode: ${shadowMode ? "🟢 enabled" : "🔴 disabled"}`];
           if (shadowMode) {
@@ -2287,7 +2293,7 @@ export default function (pi: ExtensionAPI) {
         const emoji = rating === "good" ? "👍" : "👎";
         const reasonSuffix = reason ? ` (${reason})` : "";
         const tagSuffix = tags.length > 0 ? ` [tags: ${tags.join(", ")}]` : "";
-        ctx.ui.notify(`${emoji} Rated ${recentDecision.label} as ${rating}${reasonSuffix}${tagSuffix}`, "success");
+        ctx.ui.notify(`${emoji} Rated ${recentDecision.label} as ${rating}${reasonSuffix}${tagSuffix}`, "info");
         return;
       }
 
@@ -2297,7 +2303,7 @@ export default function (pi: ExtensionAPI) {
         const action = String(actionRaw ?? "show").toLowerCase();
         if (action === "enable") {
           quotaCache.setEnabled(true);
-          ctx.ui.notify("UVI enabled. Background refresh will run on the next prompt (or use /auto-router uvi refresh).", "success");
+          ctx.ui.notify("UVI enabled. Background refresh will run on the next prompt (or use /auto-router uvi refresh).", "info");
           return;
         }
         if (action === "disable") {
@@ -2408,20 +2414,18 @@ export default function (pi: ExtensionAPI) {
           }
         }
         const uviLines = (() => {
-          const snaps = balanceCache.size > 0 ? Object.fromEntries(
-            [...balanceCache.entries()].filter(([, b]) => !b.error).map(([provider]) => {
-              const limit = budgetTracker.getMonthlyLimits()[provider];
-              if (!limit) return [];
-              const spend = budgetTracker.getMonthlySpend()[provider] ?? 0;
-              const window = buildMonthlyQuotaWindow(provider, spend, limit);
-              if (!window) return [];
-              const snap = aggregateProviderUVI(provider, [window]);
-              return [provider, snap];
-            }).filter((x) => x.length > 0)
-          ) : {};
-          return Object.entries(snaps).map(([provider, snap]) => {
-            return `  ${provider.padEnd(22)} UVI=${snap.uvi.toFixed(2).padStart(5)} ${snap.status.padEnd(8)} | monthly@${Math.round((budgetTracker.getMonthlySpend()[provider] ?? 0) / (budgetTracker.getMonthlyLimits()[provider] ?? 1) * 100)}%`;
-          });
+          const lines: string[] = [];
+          for (const [provider, balance] of balanceCache) {
+            if (balance.error) continue;
+            const limit = budgetTracker.getMonthlyLimits()[provider];
+            if (!limit) continue;
+            const spend = budgetTracker.getMonthlySpend()[provider] ?? 0;
+            const window = buildMonthlyQuotaWindow(provider, spend, limit);
+            if (!window) continue;
+            const snap = aggregateProviderUVI(provider, [window], Date.now());
+            lines.push(`  ${provider.padEnd(22)} UVI=${snap.uvi.toFixed(2).padStart(5)} ${snap.status.padEnd(8)} | monthly@${Math.round((budgetTracker.getMonthlySpend()[provider] ?? 0) / (budgetTracker.getMonthlyLimits()[provider] ?? 1) * 100)}%`);
+          }
+          return lines;
         })();
         ctx.ui.notify([
           "Per-token provider balances:",
@@ -2736,7 +2740,7 @@ export default function (pi: ExtensionAPI) {
 
         if (action === "clear") {
           decisionLogger.clear();
-          ctx.ui.notify("Decision log cleared.", "success");
+          ctx.ui.notify("Decision log cleared.", "info");
           return;
         }
 
@@ -2756,7 +2760,7 @@ export default function (pi: ExtensionAPI) {
       if (subcommand === "reload") {
         rebuildProvider(pi);
         updateUi(ctx);
-        ctx.ui.notify(`Reloaded auto-router config from ${ROUTES_PATH}${configError ? `\nWarning: ${configError}` : ""}`, configError ? "warning" : "success");
+        ctx.ui.notify(`Reloaded auto-router config from ${ROUTES_PATH}${configError ? `\nWarning: ${configError}` : ""}`, configError ? "warning" : "info");
         return;
       }
 
@@ -2806,7 +2810,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         const result = resolveAlias(remainder, ctx);
-        ctx.ui.notify(result.success ?? result.error ?? "No result", result.success ? "success" : "error");
+        ctx.ui.notify(result.success ?? result.error ?? "No result", result.success ? "info" : "error");
         return;
       }
 
@@ -2833,9 +2837,9 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("Invalid spec. Use provider/modelId", "error");
           return;
         }
-        const res = resolveModelFromRegistry({ provider: spec.provider, modelId: spec.modelId, label: "Test" }, ctx);
+        const res = resolveModelFromRegistry({ provider: spec.provider, modelId: spec.modelId, label: "Test" }, ctx as unknown as Context);
         if (res) {
-          ctx.ui.notify(`✅ Resolved ${spec.provider}/${spec.modelId}\nTarget: ${res.provider}/${res.id}\nName: ${res.name}`, "success");
+          ctx.ui.notify(`✅ Resolved ${spec.provider}/${spec.modelId}\nTarget: ${res.provider}/${res.id}\nName: ${res.name}`, "info");
         } else {
           const available = ctx.modelRegistry.getAvailable();
           const providers = Array.from(new Set(available.map((m: any) => m.provider))).join(", ");

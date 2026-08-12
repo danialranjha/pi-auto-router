@@ -104,9 +104,9 @@ describe("PolicyEngine skeleton", () => {
 
 describe("mergeHints", () => {
   it("returns a copy when base is null", () => {
-    const hints: RoutingHints = { tierOverride: "fast" };
+    const hints: RoutingHints = { tierOverride: "economy" };
     const result = mergeHints(null, hints);
-    assert.equal(result.tierOverride, "fast");
+    assert.equal(result.tierOverride, "economy");
     assert.notEqual(result, hints); // should be a copy
   });
 
@@ -127,10 +127,10 @@ describe("mergeHints", () => {
   });
 
   it("handles full merge of disjoint keys", () => {
-    const base: RoutingHints = { tierOverride: "fast" };
+    const base: RoutingHints = { tierOverride: "economy" };
     const incoming: RoutingHints = { forceReasoning: true, excludeProviders: ["p1"] };
     const result = mergeHints(base, incoming);
-    assert.equal(result.tierOverride, "fast");
+    assert.equal(result.tierOverride, "economy");
     assert.equal(result.forceReasoning, true);
     assert.deepEqual(result.excludeProviders, ["p1"]);
   });
@@ -164,7 +164,7 @@ describe("buildStrategyRules", () => {
 
   it("stamps routeId onto generated rules when provided", () => {
     const configs: PolicyRuleConfig[] = [
-      { name: "scoped", priority: 1, type: "force-tier", tier: "fast" },
+      { name: "scoped", priority: 1, type: "force-tier", tier: "economy" },
     ];
     const rules = buildStrategyRules(configs, "subscription-premium");
     assert.equal(rules[0].routeId, "subscription-premium");
@@ -233,7 +233,7 @@ describe("buildStrategyRules", () => {
     const ctxBig: RoutingContext = { ...ctx, estimatedTokens: 5000 };
 
     const configs: PolicyRuleConfig[] = [
-      { name: "small-only", priority: 1, type: "force-tier", tier: "fast", condition: { estimatedTokensMax: 1000 } },
+      { name: "small-only", priority: 1, type: "force-tier", tier: "economy", condition: { estimatedTokensMax: 1000 } },
     ];
     const rules = buildStrategyRules(configs);
     assert.equal(rules[0].condition(ctxSmall), true);
@@ -242,7 +242,7 @@ describe("buildStrategyRules", () => {
 
   it("condition with no filter always matches", () => {
     const configs: PolicyRuleConfig[] = [
-      { name: "always", priority: 1, type: "force-tier", tier: "fast" },
+      { name: "always", priority: 1, type: "force-tier", tier: "economy" },
     ];
     const rules = buildStrategyRules(configs);
     assert.equal(rules[0].condition(ctx), true);
@@ -316,12 +316,12 @@ describe("PolicyEngine evaluateStrategy", () => {
   it("returns hints from matching strategy rules", () => {
     const engine = new PolicyEngine({
       strategyRules: [
-        { name: "s1", priority: 1, condition: () => true, action: () => ({ tierOverride: "fast" }) },
+        { name: "s1", priority: 1, condition: () => true, action: () => ({ tierOverride: "economy" }) },
       ],
     });
     const hints = engine.evaluateStrategy(ctx);
     assert.ok(hints);
-    assert.equal(hints!.tierOverride, "fast");
+    assert.equal(hints!.tierOverride, "economy");
     const lastHints = engine.getLastHints();
     assert.ok(lastHints);
     assert.equal(lastHints!.ruleName, "s1");
@@ -343,7 +343,7 @@ describe("PolicyEngine evaluateStrategy", () => {
   it("skips rules whose condition returns false", () => {
     const engine = new PolicyEngine({
       strategyRules: [
-        { name: "skip", priority: 1, condition: () => false, action: () => ({ tierOverride: "fast" }) },
+        { name: "skip", priority: 1, condition: () => false, action: () => ({ tierOverride: "economy" }) },
         { name: "match", priority: 2, condition: () => true, action: () => ({ tierOverride: "reasoning" }) },
       ],
     });
@@ -356,18 +356,18 @@ describe("PolicyEngine evaluateStrategy", () => {
     const engine = new PolicyEngine({
       strategyRules: [
         { name: "null-action", priority: 1, condition: () => true, action: () => null },
-        { name: "match", priority: 2, condition: () => true, action: () => ({ tierOverride: "fast" }) },
+        { name: "match", priority: 2, condition: () => true, action: () => ({ tierOverride: "economy" }) },
       ],
     });
     const hints = engine.evaluateStrategy(ctx);
     assert.ok(hints);
-    assert.equal(hints!.tierOverride, "fast");
+    assert.equal(hints!.tierOverride, "economy");
   });
 
   it("rebuildStrategyRules replaces all strategy rules", () => {
     const engine = new PolicyEngine({
       strategyRules: [
-        { name: "old", priority: 1, condition: () => true, action: () => ({ tierOverride: "fast" }) },
+        { name: "old", priority: 1, condition: () => true, action: () => ({ tierOverride: "economy" }) },
       ],
     });
     engine.rebuildStrategyRules([
@@ -385,7 +385,7 @@ describe("PolicyEngine evaluateStrategy", () => {
         { name: "d", priority: 1, condition: () => true, action: (c) => makePassthroughDecision(target, c, "test") },
       ],
       strategyRules: [
-        { name: "s", priority: 1, condition: () => true, action: () => ({ tierOverride: "fast" }) },
+        { name: "s", priority: 1, condition: () => true, action: () => ({ tierOverride: "economy" }) },
       ],
     });
     engine.decide(ctx);
@@ -402,11 +402,11 @@ describe("PolicyEngine evaluateStrategy", () => {
     const ctxB: RoutingContext = { ...ctx, routeId: "route-b" };
     const engine = new PolicyEngine({
       strategyRules: [
-        { name: "global", priority: 1, routeId: undefined, condition: () => true, action: () => ({ tierOverride: "fast" }) },
+        { name: "global", priority: 1, routeId: undefined, condition: () => true, action: () => ({ tierOverride: "economy" }) },
       ],
     });
-    assert.equal(engine.evaluateStrategy(ctxA)!.tierOverride, "fast");
-    assert.equal(engine.evaluateStrategy(ctxB)!.tierOverride, "fast");
+    assert.equal(engine.evaluateStrategy(ctxA)!.tierOverride, "economy");
+    assert.equal(engine.evaluateStrategy(ctxB)!.tierOverride, "economy");
   });
 
   it("scopes route-specific rules to their route only", () => {
@@ -415,11 +415,11 @@ describe("PolicyEngine evaluateStrategy", () => {
     const engine = new PolicyEngine({
       strategyRules: [
         { name: "only-a", priority: 1, routeId: "route-a", condition: () => true, action: () => ({ tierOverride: "reasoning" }) },
-        { name: "only-b", priority: 1, routeId: "route-b", condition: () => true, action: () => ({ tierOverride: "fast" }) },
+        { name: "only-b", priority: 1, routeId: "route-b", condition: () => true, action: () => ({ tierOverride: "economy" }) },
       ],
     });
     assert.equal(engine.evaluateStrategy(ctxA)!.tierOverride, "reasoning");
-    assert.equal(engine.evaluateStrategy(ctxB)!.tierOverride, "fast");
+    assert.equal(engine.evaluateStrategy(ctxB)!.tierOverride, "economy");
   });
 
   it("mixes global and route-scoped rules correctly", () => {
@@ -449,7 +449,7 @@ describe("PolicyEngine evaluateStrategy", () => {
   it("trace records per-rule match/fail status", () => {
     const engine = new PolicyEngine({
       strategyRules: [
-        { name: "skip-condition", priority: 1, condition: () => false, action: () => ({ tierOverride: "fast" }) },
+        { name: "skip-condition", priority: 1, condition: () => false, action: () => ({ tierOverride: "economy" }) },
         { name: "match", priority: 2, condition: () => true, action: () => ({ forceReasoning: true }) },
         { name: "skip-route", priority: 3, routeId: "other", condition: () => true, action: () => ({ tierOverride: "economy" }) },
       ],
@@ -469,7 +469,7 @@ describe("PolicyEngine evaluateStrategy", () => {
   it("rebuildStrategyRules clears trace", () => {
     const engine = new PolicyEngine({
       strategyRules: [
-        { name: "m", priority: 1, condition: () => true, action: () => ({ tierOverride: "fast" }) },
+        { name: "m", priority: 1, condition: () => true, action: () => ({ tierOverride: "economy" }) },
       ],
     });
     engine.evaluateStrategy(ctx);
@@ -481,7 +481,7 @@ describe("PolicyEngine evaluateStrategy", () => {
   it("reset clears trace", () => {
     const engine = new PolicyEngine({
       strategyRules: [
-        { name: "m", priority: 1, condition: () => true, action: () => ({ tierOverride: "fast" }) },
+        { name: "m", priority: 1, condition: () => true, action: () => ({ tierOverride: "economy" }) },
       ],
     });
     engine.evaluateStrategy(ctx);
