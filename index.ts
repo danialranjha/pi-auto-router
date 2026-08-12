@@ -23,6 +23,7 @@ import { QuotaCache, mapRouteProviderToOAuth } from "./src/quota-cache.ts";
 import { getProviderHealthCache } from "./src/health-check.ts";
 import { LatencyTracker } from "./src/latency-tracker.ts";
 import { compareTargets } from "./src/target-ranker.ts";
+import { orderCandidateBuckets, parseRoutingOrder, type RoutingOrder } from "./src/routing-order.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { buildRatingFromCompletedDecision, getMostRecentCompletedDecision, rememberCompletedDecision, type CompletedDecisionFeedbackContext } from "./src/rating-attribution.ts";
@@ -58,6 +59,7 @@ type RouteDefinition = {
   input?: ("text" | "image")[];
   contextWindow?: number;
   maxTokens?: number;
+  sortBy?: RoutingOrder;
   targets: RouteTarget[];
   policyRules?: PolicyRuleConfig[];
 };
@@ -444,6 +446,7 @@ function loadRoutesConfig(): void {
         input: Array.isArray(routeDef.input) ? routeDef.input.filter((x): x is "text" | "image" => x === "text" || x === "image") : ["text", "image"],
         contextWindow: typeof routeDef.contextWindow === "number" ? routeDef.contextWindow : undefined,
         maxTokens: typeof routeDef.maxTokens === "number" ? routeDef.maxTokens : undefined,
+        sortBy: parseRoutingOrder((routeDef as Record<string, unknown>).sortBy),
         targets: targets.map((target) => ({ ...target })),
         policyRules,
       };
@@ -1203,42 +1206,20 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         getCost,
         getConfigIndex,
       });
-      partition.promoted.sort(rankedSort);
-      partition.normal.sort(rankedSort);
-      partition.demoted.sort(rankedSort);
-
-      // === PolicyEngine: apply post-partition hints (prefer/require providers) ===
-      if (effectiveHints?.requireProvider) {
-        // Move the required provider to the front of promoted (or normal if no promoted)
-        const reqProv = effectiveHints.requireProvider;
-        const moveToFront = (arr: RouteTarget[]) => {
-          const idx = arr.findIndex((t) => t.provider === reqProv);
-          if (idx > 0) {
-            const [item] = arr.splice(idx, 1);
-            arr.unshift(item);
-          }
-        };
-        moveToFront(partition.promoted);
-        moveToFront(partition.normal);
-        // If the required provider isn't in any bucket but is in demoted, promote it
-        const inDemoted = partition.demoted.findIndex((t) => t.provider === reqProv);
-        if (inDemoted >= 0) {
-          const [item] = partition.demoted.splice(inDemoted, 1);
-          partition.normal.unshift(item);
-        }
-      }
-      if (effectiveHints?.preferProviders && effectiveHints.preferProviders.length > 0) {
-        const preferSet = new Set(effectiveHints.preferProviders);
-        const preferSort = (a: RouteTarget, b: RouteTarget): number => compareTargets(a, b, {
-          getLatency: (target) => latencyTracker.getAvgLatency(target.provider),
-          getCost,
-          getConfigIndex,
-          preferredProviders: preferSet,
-        });
-        partition.promoted.sort(preferSort);
-        partition.normal.sort(preferSort);
-        // Leave demoted as-is (don't promote stressed providers via preference)
-      }
+      const preferSet = new Set(effectiveHints?.preferProviders ?? []);
+      const preferSort = (a: RouteTarget, b: RouteTarget): number => compareTargets(a, b, {
+        getLatency: (target) => latencyTracker.getAvgLatency(target.provider),
+        getCost,
+        getConfigIndex,
+        preferredProviders: preferSet,
+      });
+      orderCandidateBuckets(partition, {
+        mode: route.sortBy ?? "adaptive",
+        rankedCompare: rankedSort,
+        preferredCompare: preferSort,
+        requireProvider: effectiveHints?.requireProvider,
+        preferProviders: effectiveHints?.preferProviders,
+      });
       const orderedAudited = [...partition.promoted, ...partition.normal, ...partition.demoted];
       const pipelineTargets = orderedAudited.length > 0
         ? orderedAudited

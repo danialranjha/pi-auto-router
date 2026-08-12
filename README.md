@@ -602,6 +602,12 @@ The repository ships with opinionated defaults oriented around subscription-back
 
 You should edit `~/.pi/agent/extensions/auto-router.routes.json` to match your own environment.
 
+### Candidate ordering
+
+Routes default to `"sortBy": "adaptive"`, which ranks targets by observed latency, estimated cost, then declared order. Set `"sortBy": "config"` on a route to retain declared target order **within each UVI bucket**. UVI and budget classification still place promoted targets before normal targets and demoted targets last.
+
+In config mode, `requireProvider` remains an explicit override: it moves that provider to the front of its bucket, or from demoted to the front of normal. `preferProviders` is ignored so it cannot silently undo declared order. Only `adaptive` and `config` are supported; values such as `latency` and `cost` are rejected during config loading.
+
 ## Development
 
 To work on `auto-router` in your local dev environment:
@@ -666,6 +672,7 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | `health-check.ts`         | Provider health cache — verifies OAuth tokens; independent of UVI; feeds `isHealthy` into constraint solver |
 | `circuit-breaker.ts`      | Circuit breaker state machine (closed→open→half-open) for repeatedly failing providers; `/auto-router circuit` command + status line segment |
 | `candidate-partitioner.ts`| Partitions candidates into `[promoted, normal, demoted]` buckets based on budget audit + UVI; supports hard mode exclusion; cost-aware secondary tiebreaker |
+| `routing-order.ts`        | Applies adaptive or config-order sorting within UVI buckets and defines provider-hint interactions |
 | `latency-tracker.ts`      | Tracks per-provider request latency (rolling average, max 100 samples); used for performance-based ranking within UVI buckets |
 | `intent-classifier.ts`    | Heuristic intent classifier (code/creative/analysis/general) with file extension, documentation pattern, and conversation depth awareness |
 | `feedback-tracker.ts`     | User ratings of routing decisions (`/auto-router rate`); persists to auto-router.ratings.json; per-provider stats |
@@ -679,8 +686,8 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 3. Run PolicyEngine pre-constraint evaluation (tier overrides, provider exclusions, constraint tuning)
 4. Run `solveConstraints` over healthy targets with capability data from the model registry
 5. Run `auditBudget` per remaining candidate; drop blocked, warn at 80%+; apply UVI-based demote/promote reordering
-6. Run PolicyEngine post-partition hints (requireProvider, preferProviders sorting, cost tiebreaker)
-7. Order candidates: `[…promoted (surplus UVI), …normal, …demoted (stressed UVI)]` with latency + cost sort
+6. Apply post-partition provider hints according to the route's ordering mode
+7. Order candidates as `[…promoted (surplus UVI), …normal, …demoted (stressed UVI)]`; adaptive mode uses latency + cost, while config mode retains declared order within each bucket
 8. Record a `RoutingDecision` (phase, tier, target, confidence, reasoning, estimated tokens, budget remaining, hints trace)
 9. Stream from the selected target with same-request failover; circuit breaker tracks success/failure
 

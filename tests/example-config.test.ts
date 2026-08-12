@@ -22,6 +22,10 @@ describe("auto-router.routes.example.json", () => {
     }
   });
 
+  it("includes a config-order route example", () => {
+    assert.equal(exampleConfig.routes?.["subscription-fast"]?.sortBy, "config");
+  });
+
   it("keeps the gemini alias aligned with API-key models", () => {
     assert.deepEqual(exampleConfig.aliases?.gemini, [
       "google/gemini-3.1-pro-preview",

@@ -158,6 +158,7 @@
     "subscription-fast": {
       "name": "Fast & Everyday Router",
       "reasoning": false,
+      "sortBy": "config",
       "input": ["text", "image"],
       "contextWindow": 64000,
       "maxTokens": 16384,
