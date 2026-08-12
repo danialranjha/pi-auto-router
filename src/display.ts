@@ -79,12 +79,46 @@ export function parseClockResetMs(message: any): number | undefined {
   return ms > 0 ? ms : undefined;
 }
 
+/** Parse an absolute reset time like "reset at 08-14 09:18:00 UTC" and return ms until that time. */
+export function parseAbsoluteResetMs(message: any): number | undefined {
+  const text = String(message ?? "");
+  const match = text.match(/reset at (\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?: UTC)?/i);
+  if (!match) return undefined;
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const hour = Number(match[3]);
+  const minute = Number(match[4]);
+  const second = Number(match[5]);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) return undefined;
+
+  const now = Date.now();
+  const currentYear = new Date(now).getUTCFullYear();
+  const timestampForYear = (year: number): number | undefined => {
+    const timestamp = Date.UTC(year, month - 1, day, hour, minute, second);
+    const date = new Date(timestamp);
+    // Date.UTC rolls invalid dates forward (for example, February 30 to March 2).
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return undefined;
+    return timestamp;
+  };
+
+  const currentYearTarget = timestampForYear(currentYear);
+  if (currentYearTarget !== undefined && currentYearTarget >= now) return currentYearTarget - now;
+
+  // Messages omit the year, so a January reset reported in December belongs to next year.
+  const nextYearTarget = timestampForYear(currentYear + 1);
+  if (nextYearTarget === undefined) return undefined;
+  const ms = nextYearTarget - now;
+  return ms >= 0 ? ms : undefined;
+}
+
 /** Determine cooldown duration in ms based on the error message content. */
 export function getCooldownMs(message: any): number {
   const explicitResetMs = parseResetAfterMs(message);
   if (explicitResetMs) return explicitResetMs + 5_000;
   const clockResetMs = parseClockResetMs(message);
   if (clockResetMs) return clockResetMs;
+  const absoluteResetMs = parseAbsoluteResetMs(message);
+  if (absoluteResetMs !== undefined) return absoluteResetMs + 5_000;
 
   const text = String(message ?? "").toLowerCase();
   if (text.includes("429") || text.includes("rate limit") || text.includes("too many requests") || text.includes("throttled")) return 2 * 60_000;
