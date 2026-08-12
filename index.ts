@@ -22,6 +22,7 @@ import { partitionAuditedCandidates } from "./src/candidate-partitioner.ts";
 import { QuotaCache, mapRouteProviderToOAuth } from "./src/quota-cache.ts";
 import { getProviderHealthCache } from "./src/health-check.ts";
 import { LatencyTracker } from "./src/latency-tracker.ts";
+import { compareTargets } from "./src/target-ranker.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
 import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { buildRatingFromCompletedDecision, getMostRecentCompletedDecision, rememberCompletedDecision, type CompletedDecisionFeedbackContext } from "./src/rating-attribution.ts";
@@ -1190,23 +1191,13 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       // Sort within UVI buckets: latency → cost → config order.
       // Build a config-order index so we can break ties by priority (L1 before L8).
       const configIndex = new Map(ctx.availableTargets.map((t, i) => [getTargetKey(t), i]));
-      const rankedSort = (a: RouteTarget, b: RouteTarget): number => {
-        // 1. Both have latency data — compare directly (lower is better)
-        const la = latencyTracker.getAvgLatency(a.provider);
-        const lb = latencyTracker.getAvgLatency(b.provider);
-        if (la !== null && lb !== null && la !== lb) return la - lb;
-        // 2. One or both have unknown latency — sort by estimated cost (cheaper first)
-        const ca = estimateModelCost(a, context, ctx.estimatedTokens);
-        const cb = estimateModelCost(b, context, ctx.estimatedTokens);
-        if (ca !== null && cb !== null && ca !== cb) return ca - cb;
-        // 3. One has cost data, the other doesn't — prefer the one we can price
-        if (ca !== null && cb === null) return -1;
-        if (ca === null && cb !== null) return 1;
-        // 4. Everything tied — preserve config order (L1 before L8)
-        const ia = configIndex.get(getTargetKey(a)) ?? 999;
-        const ib = configIndex.get(getTargetKey(b)) ?? 999;
-        return ia - ib;
-      };
+      const getCost = (target: RouteTarget) => estimateModelCost(target, context, ctx.estimatedTokens);
+      const getConfigIndex = (target: RouteTarget) => configIndex.get(getTargetKey(target)) ?? 999;
+      const rankedSort = (a: RouteTarget, b: RouteTarget): number => compareTargets(a, b, {
+        getLatency: (target) => latencyTracker.getAvgLatency(target.provider),
+        getCost,
+        getConfigIndex,
+      });
       partition.promoted.sort(rankedSort);
       partition.normal.sort(rankedSort);
       partition.demoted.sort(rankedSort);
@@ -1233,26 +1224,12 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       }
       if (effectiveHints?.preferProviders && effectiveHints.preferProviders.length > 0) {
         const preferSet = new Set(effectiveHints.preferProviders);
-        const preferSort = (a: RouteTarget, b: RouteTarget): number => {
-          const aPref = preferSet.has(a.provider) ? 0 : 1;
-          const bPref = preferSet.has(b.provider) ? 0 : 1;
-          if (aPref !== bPref) return aPref - bPref;
-          // Within same preference group, sort by latency
-          const la = latencyTracker.getAvgLatency(a.provider);
-          const lb = latencyTracker.getAvgLatency(b.provider);
-          if (la === null && lb === null) {
-            // fall through to cost
-          } else if (la === null) return 1;
-          else if (lb === null) return -1;
-          else if (la !== lb) return la - lb;
-          // Same latency — cheaper first
-          const ca = estimateModelCost(a, context, ctx.estimatedTokens);
-          const cb = estimateModelCost(b, context, ctx.estimatedTokens);
-          if (ca !== null && cb !== null && ca !== cb) return ca - cb;
-          if (ca !== null && cb === null) return -1;
-          if (ca === null && cb !== null) return 1;
-          return 0;
-        };
+        const preferSort = (a: RouteTarget, b: RouteTarget): number => compareTargets(a, b, {
+          getLatency: (target) => latencyTracker.getAvgLatency(target.provider),
+          getCost,
+          getConfigIndex,
+          preferredProviders: preferSet,
+        });
         partition.promoted.sort(preferSort);
         partition.normal.sort(preferSort);
         // Leave demoted as-is (don't promote stressed providers via preference)
