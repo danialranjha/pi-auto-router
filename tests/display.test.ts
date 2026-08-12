@@ -546,6 +546,40 @@ describe("getPrimaryModelLimits", () => {
     assert.equal(result.maxTokens, 64000);
   });
 
+  it("prefers built-in metadata over a runtime-registry match", () => {
+    const result = getPrimaryModelLimits(
+      { targets: [{ provider: "test", modelId: "m1" }] },
+      model200k,
+      [{ provider: "test", id: "m1", contextWindow: 999000, maxTokens: 999000 }],
+    );
+    assert.deepEqual(result, { contextWindow: 200000, maxTokens: 64000 });
+  });
+
+  it("resolves custom-provider limits with normalized registry matching", () => {
+    const result = getPrimaryModelLimits(
+      { targets: [{ provider: "custom", modelId: "acme/GLM51" }] },
+      noModel,
+      [{ provider: "custom", id: "glm-5.1:instruct", contextWindow: 262144, maxTokens: 32768 }],
+    );
+    assert.deepEqual(result, { contextWindow: 262144, maxTokens: 32768 });
+  });
+
+  it("combines partial registry metadata with route and default limits", () => {
+    const fromRoute = getPrimaryModelLimits(
+      { maxTokens: 16000, targets: [{ provider: "custom", modelId: "partial" }] },
+      noModel,
+      [{ provider: "custom", id: "partial", contextWindow: 131072 }],
+    );
+    assert.deepEqual(fromRoute, { contextWindow: 131072, maxTokens: 16000 });
+
+    const fromDefault = getPrimaryModelLimits(
+      { targets: [{ provider: "custom", modelId: "partial" }] },
+      noModel,
+      [{ provider: "custom", id: "partial", contextWindow: 131072 }],
+    );
+    assert.deepEqual(fromDefault, { contextWindow: 131072, maxTokens: 128000 });
+  });
+
   it("remaps claude-agent-sdk to anthropic for model lookup", () => {
     const antModel = (p: string, _m: string) => p === "anthropic" ? { contextWindow: 500000, maxTokens: 128000 } : undefined;
     const result = getPrimaryModelLimits(

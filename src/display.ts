@@ -171,34 +171,47 @@ export function formatModelLine(
 
 /** Result of resolving primary model limits for a route. */
 export type PrimaryModelLimits = { contextWindow: number; maxTokens: number };
+export type ModelLimits = Partial<PrimaryModelLimits>;
 
 const DEFAULT_PRIMARY_MODEL_LIMITS: PrimaryModelLimits = { contextWindow: 200_000, maxTokens: 128_000 };
 
 /**
  * Resolve the primary model limits for a route.
  *
- * Priority order:
- * 1. Route's explicit contextWindow/maxTokens
- * 2. First target's model (resolved via callback)
- * 3. Hardcoded defaults (200k/128k)
+ * Priority order for each limit:
+ * 1. Route's explicit value
+ * 2. First target's built-in model (resolved via callback)
+ * 3. Matching runtime-registry model
+ * 4. Hardcoded default (200k/128k)
  */
 export function getPrimaryModelLimits(
   route: { contextWindow?: number; maxTokens?: number; targets?: Array<{ provider: string; modelId: string }> },
-  resolveModel: (provider: string, modelId: string) => PrimaryModelLimits | undefined,
+  resolveModel: (provider: string, modelId: string) => ModelLimits | undefined,
+  registryModels: RegistryModel[] = [],
 ): PrimaryModelLimits {
-  if (route.contextWindow && route.maxTokens) return { contextWindow: route.contextWindow, maxTokens: route.maxTokens };
+  const valid = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
+  if (valid(route.contextWindow) && valid(route.maxTokens)) {
+    return { contextWindow: route.contextWindow, maxTokens: route.maxTokens };
+  }
+
   const first = route.targets?.[0];
-  if (!first) return DEFAULT_PRIMARY_MODEL_LIMITS;
-  try {
+  let model: ModelLimits | undefined;
+  if (first) {
     const provider = first.provider === "claude-agent-sdk" ? "anthropic" : first.provider;
-    const model = resolveModel(provider, first.modelId);
-    if (model) return { contextWindow: model.contextWindow, maxTokens: model.maxTokens };
-  } catch { /* fall through */ }
-  return DEFAULT_PRIMARY_MODEL_LIMITS;
+    try {
+      model = resolveModel(provider, first.modelId);
+    } catch { /* fall through to registry */ }
+    model ??= findModelInRegistry(registryModels, provider, first.modelId);
+  }
+
+  return {
+    contextWindow: valid(route.contextWindow) ? route.contextWindow : valid(model?.contextWindow) ? model.contextWindow : DEFAULT_PRIMARY_MODEL_LIMITS.contextWindow,
+    maxTokens: valid(route.maxTokens) ? route.maxTokens : valid(model?.maxTokens) ? model.maxTokens : DEFAULT_PRIMARY_MODEL_LIMITS.maxTokens,
+  };
 }
 
-/** A lightweight model descriptor for registry matching (provider + id). */
-export type RegistryModel = { provider: string; id: string; name?: string };
+/** A lightweight model descriptor for registry matching. */
+export type RegistryModel = { provider: string; id: string; name?: string; contextWindow?: number; maxTokens?: number };
 
 /**
  * Find a model in the available registry that matches the requested provider/modelId.

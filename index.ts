@@ -554,13 +554,18 @@ function getInnerModel(target: RouteTarget, context?: Context): Model<Api> {
 }
 
 function getPrimaryModelLimitsFn(route: RouteDefinition): { contextWindow: number; maxTokens: number } {
+  let registryModels: any[] = [];
+  try {
+    registryModels = latestUiContext?.modelRegistry?.getAvailable?.() ?? [];
+  } catch { /* registry may be unavailable during startup */ }
+
   return getPrimaryModelLimits(route, (provider, modelId) => {
     try {
       const model = getModel(provider, modelId);
       if (model) return { contextWindow: model.contextWindow, maxTokens: model.maxTokens };
     } catch { /* SDK may throw */ }
     return undefined;
-  });
+  }, registryModels);
 }
 
 function isRetryableError(message: any): boolean {
@@ -1879,7 +1884,14 @@ function getStatusLine(routeId?: string): string {
   const healthy = getHealthyTargets(routeId).map((target) => String(target?.label ?? "Unknown"));
   const activeTarget = activeTargetByRoute.get(routeId);
   const lastTarget = lastAttemptByRoute.get(routeId);
+  const selectedTarget = activeTarget ?? lastTarget;
   const active = activeTarget ? `current: ${activeTarget}` : lastTarget ? `last: ${lastTarget}` : "no calls yet";
+  const target = routesCache[routeId].targets.find((candidate) =>
+    candidate.label === selectedTarget || describeTarget(candidate) === selectedTarget
+  );
+  const contextText = target
+    ? ` | ctx=${getPrimaryModelLimitsFn({ ...routesCache[routeId], targets: [target] }).contextWindow.toLocaleString()}`
+    : "";
   const decision = lastDecisionByRoute.get(routeId);
   const tierHint = decision ? ` | tier=${decision.tier} (${decision.metadata.confidence.toFixed(2)})` : "";
   const budgetWarning = lastBudgetWarningByRoute.get(routeId);
@@ -1889,7 +1901,7 @@ function getStatusLine(routeId?: string): string {
   const shadowText = shadowMode ? " 🔬 shadow" : "";
   const hardText = uviHardMode && quotaCache.isEnabled() ? " 🛡️ uvi-hard" : "";
   const circuitText = formatCircuitStatusSegment();
-  return `auto-router ${getRouteName(routeId)}${tierHint}${shadowText}${hardText} | ${active} | healthy: ${healthy.join(", ") || "none"} | ${formatCooldowns(routeId)}${budgetText}${healthIssuesText}${circuitText}${uviText}`;
+  return `auto-router ${getRouteName(routeId)}${tierHint}${shadowText}${hardText} | ${active}${contextText} | healthy: ${healthy.join(", ") || "none"} | ${formatCooldowns(routeId)}${budgetText}${healthIssuesText}${circuitText}${uviText}`;
 }
 
 function formatUviStatusSegment(): string {
