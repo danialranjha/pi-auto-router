@@ -1,6 +1,6 @@
-import { describe, it } from "node:test";
+import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "../src/display.ts";
+import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, parseResetAfterMs, parseClockResetMs, parseAbsoluteResetMs, getCooldownMs, normalizeModelToken, findCaseInsensitiveKey, providerApiKeyEnvVars, resolveProviderApiKeyFromEnv, formatModelLine, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "../src/display.ts";
 import type { ModelDisplayInfo } from "../src/display.ts";
 import type { RouteTarget, RoutingHints } from "../src/types.ts";
 
@@ -241,6 +241,99 @@ describe("parseClockResetMs", () => {
   it("returns undefined for invalid hour values", () => {
     assert.equal(parseClockResetMs("resets 13pm"), undefined);
     assert.equal(parseClockResetMs("resets 0pm"), undefined);
+  });
+});
+
+describe("parseAbsoluteResetMs", () => {
+  const realNow = Date.now;
+  const stubNow = (iso: string) => {
+    Date.now = () => Date.parse(iso);
+  };
+  const msBetween = (fromIso: string, toIso: string) => Date.parse(toIso) - Date.parse(fromIso);
+
+  afterEach(() => {
+    Date.now = realNow;
+  });
+
+  it("parses a future 'reset at MM-DD HH:MM:SS UTC' timestamp", () => {
+    stubNow("2026-08-10T00:00:00Z");
+    const ms = parseAbsoluteResetMs("Your token-plan 1-week quota has been exhausted. The quota will reset at 08-14 09:18:00 UTC.");
+    assert.equal(ms, msBetween("2026-08-10T00:00:00Z", "2026-08-14T09:18:00Z"));
+  });
+
+  it("computes the exact cooldown down to the second", () => {
+    stubNow("2026-08-10T00:00:00Z");
+    const ms = parseAbsoluteResetMs("reset at 08-10 00:00:30 UTC");
+    assert.equal(ms, 30_000);
+  });
+
+  it("returns 0 when the reset is happening right now", () => {
+    stubNow("2026-08-14T09:18:00Z");
+    const ms = parseAbsoluteResetMs("reset at 08-14 09:18:00 UTC");
+    assert.equal(ms, 0);
+  });
+
+  it("rolls a January reset reported in December over to next year", () => {
+    stubNow("2026-12-31T23:00:00Z");
+    const ms = parseAbsoluteResetMs("reset at 01-01 01:00:00 UTC");
+    // 2027-01-01 01:00 UTC is 2 hours away — not a few seconds in the past.
+    assert.equal(ms, 2 * 60 * 60_000);
+  });
+
+  it("uses next year when the reported date already passed this year", () => {
+    stubNow("2026-08-10T00:00:00Z");
+    const ms = parseAbsoluteResetMs("reset at 01-15 03:00:00 UTC");
+    assert.equal(ms, msBetween("2026-08-10T00:00:00Z", "2027-01-15T03:00:00Z"));
+  });
+
+  it("supports messages without the UTC suffix", () => {
+    stubNow("2026-08-10T00:00:00Z");
+    const ms = parseAbsoluteResetMs("reset at 08-14 09:18:00");
+    assert.equal(ms, msBetween("2026-08-10T00:00:00Z", "2026-08-14T09:18:00Z"));
+  });
+
+  it("rejects out-of-range values instead of letting Date.UTC roll them over", () => {
+    stubNow("2026-08-10T00:00:00Z");
+    assert.equal(parseAbsoluteResetMs("reset at 13-01 00:00:00 UTC"), undefined);
+    assert.equal(parseAbsoluteResetMs("reset at 00-01 00:00:00 UTC"), undefined);
+    assert.equal(parseAbsoluteResetMs("reset at 08-00 00:00:00 UTC"), undefined);
+    assert.equal(parseAbsoluteResetMs("reset at 08-32 00:00:00 UTC"), undefined);
+    assert.equal(parseAbsoluteResetMs("reset at 08-14 24:00:00 UTC"), undefined);
+    assert.equal(parseAbsoluteResetMs("reset at 08-14 09:60:00 UTC"), undefined);
+    assert.equal(parseAbsoluteResetMs("reset at 08-14 09:18:60 UTC"), undefined);
+  });
+
+  it("rejects impossible calendar dates like February 30", () => {
+    stubNow("2026-08-10T00:00:00Z");
+    assert.equal(parseAbsoluteResetMs("reset at 02-30 00:00:00 UTC"), undefined);
+    assert.equal(parseAbsoluteResetMs("reset at 04-31 00:00:00 UTC"), undefined);
+  });
+
+  it("returns undefined for non-matching messages", () => {
+    stubNow("2026-08-10T00:00:00Z");
+    assert.equal(parseAbsoluteResetMs("429 Too Many Requests"), undefined);
+    assert.equal(parseAbsoluteResetMs("reset after 30 seconds"), undefined);
+    assert.equal(parseAbsoluteResetMs(""), undefined);
+  });
+});
+
+describe("getCooldownMs absolute reset", () => {
+  const realNow = Date.now;
+
+  afterEach(() => {
+    Date.now = realNow;
+  });
+
+  it("uses the exact absolute reset time instead of the 5m quota fallback", () => {
+    Date.now = () => Date.parse("2026-08-10T00:00:00Z");
+    const ms = getCooldownMs("Your token-plan 1-week quota has been exhausted. The quota will reset at 08-14 09:18:00 UTC.");
+    const exact = Date.parse("2026-08-14T09:18:00Z") - Date.parse("2026-08-10T00:00:00Z");
+    assert.equal(ms, exact + 5_000);
+  });
+
+  it("falls back to the generic 5m quota cooldown for garbled absolute times", () => {
+    Date.now = () => Date.parse("2026-08-10T00:00:00Z");
+    assert.equal(getCooldownMs("quota exhausted, reset at 13-99 99:99:99 UTC"), 5 * 60_000);
   });
 });
 
