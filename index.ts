@@ -1240,7 +1240,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         preferredProviders: preferSet,
       });
       orderCandidateBuckets(partition, {
-        mode: route.sortBy ?? "adaptive",
+        mode: routesCache[routeId]?.sortBy ?? "adaptive",
         rankedCompare: rankedSort,
         preferredCompare: preferSort,
         requireProvider: effectiveHints?.requireProvider,

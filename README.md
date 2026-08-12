@@ -647,6 +647,25 @@ After making changes to `index.ts`, reload the extension inside pi without resta
 /auto-router reload
 ```
 
+### Install the local checkout as a Pi package
+
+To use the checkout persistently rather than loading only `index.ts`, install the package directory:
+
+```bash
+pi install /absolute/path/to/pi-auto-router
+```
+
+Do not also list `index.ts`, `model-status.ts`, or an older standalone `auto-router-model-status.ts` under Pi's direct `extensions` configuration. Loading both the package and individual files creates duplicate extension instances.
+
+Verify the package without reloading the current interactive session:
+
+```bash
+pi list
+pi --list-models | grep '^auto-router'
+```
+
+After verification, run `/reload` manually when ready to activate the new extension runtime.
+
 Use the built-in debug commands to verify routing and model resolution:
 
 ```text
