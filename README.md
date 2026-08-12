@@ -222,6 +222,8 @@ The router also writes an append-only event log at:
 ~/.pi/agent/extensions/auto-router.events.jsonl
 ```
 
+The packaged model-status integration reads only the final 64 KiB of this file, tags new events with the current Pi session id, and ignores events from other sessions. Its timer and file watcher are created only from `session_start` and are always closed by `session_shutdown` during quit, reload, new, resume, and fork flows.
+
 You can inspect that log with three repo scripts:
 
 - `node scripts/routing-stats.mjs` — top-level routing/event counters
@@ -557,6 +559,27 @@ auto-router Subscription Premium Router 🔬 shadow | tier=reasoning (0.90) | cu
 - `tier=<tier> (<confidence>)` appears once a routing decision has been recorded
 - `⚠ …` appears when one or more candidate providers are at 80%+ of their daily limit
 - `uvi: …` appears when one or more providers have `stressed` or `critical` UVI status
+- `subscription-swe → <model-id>` (under the `auto-router-model` status key) shows the latest routed model for the current Pi session
+
+### Model-status lifecycle and legacy installs
+
+`model-status.ts` is maintained and installed as part of this package. It initializes on `session_start`, retains its polling timer and `FSWatcher`, and invalidates its context before closing both resources on every `session_shutdown`. Raw Node callbacks are guarded so a late callback cannot use a replaced runtime's stale `ctx`.
+
+Older local setups may also have an unmanaged copy at:
+
+```text
+~/.pi/agent/extensions/auto-router-model-status.ts
+```
+
+Do not load that legacy file alongside the packaged integration: it creates a duplicate status monitor, and older versions do not clean up on session replacement. After updating to a release containing this fix, disable or remove that file before the next Pi reload. For a reversible update:
+
+```bash
+pi update npm:pi-auto-router
+mv ~/.pi/agent/extensions/auto-router-model-status.ts \
+   ~/.pi/agent/extensions/auto-router-model-status.ts.disabled
+```
+
+Then run `/reload` manually. Existing event records written before session tagging was added are intentionally ignored by session-filtered status initialization. The analytics JSONL file itself remains global and append-only; the bundled reporting scripts still aggregate all sessions by design.
 
 ## Behavior notes
 
@@ -646,6 +669,7 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | `latency-tracker.ts`      | Tracks per-provider request latency (rolling average, max 100 samples); used for performance-based ranking within UVI buckets |
 | `intent-classifier.ts`    | Heuristic intent classifier (code/creative/analysis/general) with file extension, documentation pattern, and conversation depth awareness |
 | `feedback-tracker.ts`     | User ratings of routing decisions (`/auto-router rate`); persists to auto-router.ratings.json; per-provider stats |
+| `model-status.ts`         | Session-scoped routed-model status, bounded JSONL tail reads, watcher/timer ownership, teardown, and stale-callback guards |
 | `display.ts`              | Pure display utilities: model spec parsing, target description, hints formatting, cooldown helpers, token normalization |
 
 `index.ts` wires these together inside `streamAutoRouter`:

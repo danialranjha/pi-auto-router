@@ -2,7 +2,14 @@
 
 ## Unreleased
 
+## 0.2.4
+
+**Release date:** 2026-08-12
+
 ### Fixed
+- The routed-model status integration is now maintained in this package and owns its timer and `FSWatcher` per Pi session. Resources start idempotently from `session_start`, are invalidated and closed during every `session_shutdown`, and late Node callbacks cannot access a stale extension context after reload/new/resume/fork.
+- Routed-model status tail reads now use a positioned, bounded read of the final 64 KiB instead of synchronously loading the entire append-only event log on every poll. Missing, empty, concurrently appended, malformed, and partial JSONL records are handled without escaping exceptions.
+- Router events now carry the current Pi session id, and model status filters the global event log by that id to prevent another session/process from changing the displayed model. Legacy untagged events remain available to analytics but are not used for session-filtered status initialization.
 - Route targets with `authProvider` can now fall back to provider API-key environment variables when pi auth is missing or expired.
 - Credential resolution now accepts API keys stored in `auth.json`'s `key` field and Pi's canonical provider variables such as `GEMINI_API_KEY` and `MOONSHOT_API_KEY`.
 - Per-token targets without `authProvider` are excluded when no stored or environment provider API key is available instead of being reported as healthy.

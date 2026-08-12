@@ -328,8 +328,8 @@ describe("resolveProviderApiKeyFromEnv", () => {
 
   it("returns key from OLLAMA_API_KEY env var", () => {
     assert.equal(
-      resolveProviderApiKeyFromEnv("ollama", { OLLAMA_API_KEY: "test-ollama-key-123" }),
-      "test-ollama-key-123",
+      resolveProviderApiKeyFromEnv("ollama", { OLLAMA_API_KEY: "test" }),
+      "test",
     );
   });
 

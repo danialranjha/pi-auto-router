@@ -106,6 +106,7 @@ const uviHardMode = (() => {
 
 let budgetReady = false;
 let latestUiContext: any;
+let activeSessionId: string | undefined;
 const conversationIds = new WeakMap<object, string>();
 const lastDecisionByConversation = new Map<string, { requestId: string; routeId: string; provider: string; modelId: string; timestamp: number }>();
 let recentCompletedDecisions: CompletedDecisionFeedbackContext[] = [];
@@ -1061,6 +1062,7 @@ function emitRouterEvent<T extends Record<string, unknown>>(
     requestId: ids.requestId,
     conversationId: ids.conversationId,
     routeId: ids.routeId,
+    sessionId: activeSessionId,
     version: 1,
     data,
   });
@@ -2074,8 +2076,14 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", async (_event, ctx) => {
+    activeSessionId = ctx.sessionManager.getSessionId();
     updateUi(ctx);
     triggerStartupUviRefresh();
+  });
+  pi.on("session_shutdown", async () => {
+    // Session-bound contexts become stale immediately after this hook returns.
+    latestUiContext = undefined;
+    activeSessionId = undefined;
   });
   pi.on("model_select", async (_event, ctx) => updateUi(ctx));
   pi.on("agent_start", async (_event, ctx) => updateUi(ctx));

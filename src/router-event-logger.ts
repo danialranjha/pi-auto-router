@@ -10,6 +10,8 @@ type RouterEventEnvelope<T = Record<string, unknown>> = {
   requestId: string;
   conversationId: string;
   routeId: string;
+  /** Pi session id when emitted by lifecycle-aware versions of the extension. */
+  sessionId?: string;
   version: 1;
   data: T;
 };
