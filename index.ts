@@ -39,6 +39,7 @@ import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
 import { RouterEventLogger } from "./src/router-event-logger.ts";
 import { sanitizeContext } from "./src/context-sanitizer.ts";
+import { shouldFailOverThoughtSignatureError } from "./src/signature-failover.ts";
 import { detectValidationTrace } from "./src/validation-outcome-detector.ts";
 import { buildSweSubtaskHeuristic } from "./src/swe-subtask-heuristics.ts";
 import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, BudgetState, QuotaWindow, PolicyRuleConfig, DecisionAttemptLog, DecisionCandidateTrace, DecisionReasoningTrace } from "./src/types.ts";
@@ -713,7 +714,7 @@ async function tryTarget(
   };
 
   cacheOptimizerRouting.publish(outerModel.id, target, "trying", { ...routingScope, api: innerModel.api });
-  const sanitized = sanitizeContext(context, target.provider);
+  const sanitized = sanitizeContext(context, target.provider, target.modelId, innerModel.api);
   // Pass route-configured maxTokens through to the inner model.
   // The route config is authoritative; if not set, let the model use its default.
   const routeDef = routesCache[outerModel.id];
@@ -749,8 +750,11 @@ async function tryTarget(
 
       if (event.type === "error") {
         const message = event.error?.errorMessage || `${target.label || "Target"}: unknown error`;
-        if (!sawSubstantive && isRetryableError(message)) {
-          putOnCooldown(target, message, outerModel.id);
+        const signatureFailover = shouldFailOverThoughtSignatureError(message, sawSubstantive);
+        if (signatureFailover || (!sawSubstantive && isRetryableError(message))) {
+          // Signature failures belong to this conversation history, not provider health.
+          // Fail over this request without globally cooling down an otherwise healthy target.
+          if (!signatureFailover) putOnCooldown(target, message, outerModel.id);
           return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, ttftMs };
         }
         flush();
@@ -784,8 +788,9 @@ async function tryTarget(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (!sawSubstantive && isRetryableError(message)) {
-      putOnCooldown(target, message, outerModel.id);
+    const signatureFailover = shouldFailOverThoughtSignatureError(message, sawSubstantive);
+    if (signatureFailover || (!sawSubstantive && isRetryableError(message))) {
+      if (!signatureFailover) putOnCooldown(target, message, outerModel.id);
       return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, ttftMs };
     }
     throw error;
@@ -795,8 +800,9 @@ async function tryTarget(
 
   if (lastMessage?.stopReason === "error" || lastMessage?.errorMessage) {
     const message = lastMessage.errorMessage || "Unknown terminal error";
-    if (!sawSubstantive && isRetryableError(message)) {
-      putOnCooldown(target, message, outerModel.id);
+    const signatureFailover = shouldFailOverThoughtSignatureError(message, sawSubstantive);
+    if (signatureFailover || (!sawSubstantive && isRetryableError(message))) {
+      if (!signatureFailover) putOnCooldown(target, message, outerModel.id);
       return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, ttftMs };
     }
     return {
