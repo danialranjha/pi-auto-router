@@ -59,8 +59,9 @@ function parseArgs(argv) {
     routeId: undefined,
     since: undefined,
     json: false,
-    limit: 25,
+    limit: 10,
     dailyTop: 3,
+    verbose: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -70,6 +71,7 @@ function parseArgs(argv) {
     else if (arg === '--limit') options.limit = Number(argv[++i]);
     else if (arg === '--daily-top') options.dailyTop = Number(argv[++i]);
     else if (arg === '--json') options.json = true;
+    else if (arg === '--verbose' || arg === '-v') options.verbose = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
@@ -79,7 +81,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/routing-session-stats.mjs [options]\n\nOptions:\n  --file <path>       Event JSONL path (default: ~/.pi/agent/extensions/auto-router.events.jsonl)\n  --route <id>        Filter by routeId\n  --since <iso>       Filter events at/after this ISO time\n  --limit <n>         Max rows per section (default: 25)\n  --daily-top <n>     Top models/providers to show per day (default: 3)\n  --json              Print JSON\n  -h, --help          Show help`);
+  console.log(`Usage: node scripts/routing-session-stats.mjs [options]\n\nOptions:\n  --file <path>       Event JSONL path (default: ~/.pi/agent/extensions/auto-router.events.jsonl)\n  --route <id>        Filter by routeId\n  --since <iso>       Filter events at/after this ISO time\n  --limit <n>         Max rows per section (default: 10)\n  --daily-top <n>     Top models/providers to show per day (default: 3)\n  --json              Print JSON\n  -v, --verbose       Show detailed histograms and all drift events\n  -h, --help          Show help`);
 }
 
 async function loadEvents(file, sinceMs, routeId) {
@@ -691,7 +693,7 @@ function buildTimelineAxisTicks(width) {
   return chars.join('');
 }
 
-function buildText(summary, file) {
+function buildText(summary, file, options = { verbose: false }) {
   const lines = [];
   const windowLabel = `${formatLocalTimestamp(summary.window.startMs) ?? '[unknown]'} → ${formatLocalTimestamp(summary.window.endMs) ?? '[unknown]'} (local)`;
   lines.push(`Routing session stats from ${file}`);
@@ -719,21 +721,27 @@ function buildText(summary, file) {
   }
   lines.push('');
 
-  lines.push(`UVI selection mix by day (window: ${windowLabel})`);
-  for (const row of summary.dailyUviMix) lines.push(`  ${row.key}  total=${String(row.total).padStart(3)}  ${row.bar}  ${row.labels.padEnd(30)} success=${fmt(row.successRate)}% latency=${fmt(row.avgLatencyMs, 0)}ms`);
-  lines.push('');
+  if (options.verbose) {
+    lines.push(`UVI selection mix by day (window: ${windowLabel})`);
+    for (const row of summary.dailyUviMix) lines.push(`  ${row.key}  total=${String(row.total).padStart(3)}  ${row.bar}  ${row.labels.padEnd(30)} success=${fmt(row.successRate)}% latency=${fmt(row.avgLatencyMs, 0)}ms`);
+    lines.push('');
+  }
 
   lines.push(`Latency distribution by model (window: ${windowLabel})`);
   for (const row of summary.latencyDistributionByModel) {
     lines.push(`  ${row.key}  p50=${fmt(row.p50, 0)}ms n=${row.count}`);
-    for (const bucket of row.buckets) lines.push(`    ${bucket.label.padEnd(8)} ${bucket.bar.padEnd(12)} ${bucket.count}`);
+    if (options.verbose) {
+      for (const bucket of row.buckets) lines.push(`    ${bucket.label.padEnd(8)} ${bucket.bar.padEnd(12)} ${bucket.count}`);
+    }
   }
   lines.push('');
 
   lines.push(`Cost distribution by model (window: ${windowLabel})`);
   for (const row of summary.costDistributionByModel) {
     lines.push(`  ${row.key}  p50=$${fmt(row.p50, 4)} n=${row.count}`);
-    for (const bucket of row.buckets) lines.push(`    ${bucket.label.padEnd(8)} ${bucket.bar.padEnd(12)} ${bucket.count}`);
+    if (options.verbose) {
+      for (const bucket of row.buckets) lines.push(`    ${bucket.label.padEnd(8)} ${bucket.bar.padEnd(12)} ${bucket.count}`);
+    }
   }
   lines.push('');
 
@@ -751,9 +759,10 @@ function buildText(summary, file) {
   for (const row of summary.driftErrorSummary) lines.push(`  n=${String(row.count).padStart(3)} share=${fmt(row.sharePct)}% error=${row.error.slice(0, 180)}`);
   lines.push('');
 
-  lines.push(`Planned → actual drift (window: ${windowLabel})`);
-  if (summary.driftSessions.length === 0) lines.push('  none');
-  for (const row of summary.driftSessions) lines.push(`  ${row.timestamp ?? '-'} type=${row.driftType} planned=${row.planned} actual=${row.actual} uvi=${row.uviStatus} outcome=${row.outcome} codes=${(row.driftCodes ?? []).join(',') || 'none'} reason=${row.driftSummary || '-'} req=${shortId(row.requestId)}`);
+  const driftsToShow = options.verbose ? summary.driftSessions : summary.driftSessions.slice(0, 5);
+  lines.push(`Planned → actual drift (window: ${windowLabel}${options.verbose || summary.driftSessions.length <= 5 ? '' : ', showing top 5'})`);
+  if (driftsToShow.length === 0) lines.push('  none');
+  for (const row of driftsToShow) lines.push(`  ${row.timestamp ?? '-'} type=${row.driftType} planned=${row.planned} actual=${row.actual} uvi=${row.uviStatus} outcome=${row.outcome} codes=${(row.driftCodes ?? []).join(',') || 'none'} reason=${row.driftSummary || '-'} req=${shortId(row.requestId)}`);
 
   return lines.join('\n');
 }
@@ -767,7 +776,7 @@ async function main() {
   const events = await loadEvents(file, sinceMs, options.routeId);
   const summary = summarize(events, options.limit, options.dailyTop);
   if (options.json) console.log(JSON.stringify(summary, null, 2));
-  else console.log(buildText(summary, file));
+  else console.log(buildText(summary, file, options));
 }
 
 main().catch((error) => {

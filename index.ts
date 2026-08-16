@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   createAssistantMessageEventStream,
-  getModel,
-  streamSimple,
   type Api,
   type AssistantMessage,
   type AssistantMessageEventStream,
@@ -13,6 +11,7 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { getModel, streamSimple } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildRoutingContext } from "./src/context-analyzer.ts";
 import { DEFAULT_SHORTCUTS, listShortcuts, parseShortcut } from "./src/shortcut-parser.ts";
@@ -715,13 +714,12 @@ async function tryTarget(
 
   cacheOptimizerRouting.publish(outerModel.id, target, "trying", { ...routingScope, api: innerModel.api });
   const sanitized = sanitizeContext(context, target.provider, target.modelId, innerModel.api);
-  // Pass route-configured maxTokens through to the inner model.
-  // The route config is authoritative; if not set, let the model use its default.
+  // Respect route output limits without exceeding the selected model's own limit.
   const routeDef = routesCache[outerModel.id];
   const routeMaxTokens = routeDef?.maxTokens;
   const innerOptions: SimpleStreamOptions = { ...options, apiKey: token };
   if (typeof routeMaxTokens === "number" && routeMaxTokens > 0) {
-    innerOptions.maxTokens = routeMaxTokens;
+    innerOptions.maxTokens = Math.min(routeMaxTokens, innerModel.maxTokens);
   }
   const optimized = applyCacheOptimizerHints(sanitized, innerOptions, outerModel.id, innerModel, routingScope.sessionId);
   const inner = streamSimple(innerModel, optimized.context, optimized.options);
