@@ -9,7 +9,7 @@
     { "name": "require-vision", "type": "force-constraint", "constraint": { "vision": true }, "priority": 1 },
     { "name": "weekend-economy", "type": "force-tier", "tier": "economy", "daysOfWeek": [0, 6] }
   ],
-  "_comment_providers": "Claude (claude-agent-sdk) and NVIDIA NIM removed 2026-07-31 due to reliability issues. Active: moonshotai (Kimi API key), deepseek (API key), openai-codex (subscription), google (API key), ollama (GLM). Re-add Claude/NVIDIA when stable.",
+  "_comment_providers": "NVIDIA NIM re-added 2026-09-27 as GLM-5.3 last-resort fallback only (free tier: variable latency, ~40 RPM cap). Claude (claude-agent-sdk) removed 2026-07-31 due to reliability; openai (API-key) removed 2026-09-17 (no key). claude-sonnet-5 added 2026-09-28 via github-copilot (direct anthropic OAuth is haiku-only; Opus 5.5 / Fable 5.1 not entitled on this plan); moonshotai (Kimi) re-added 2026-09-28 (kimi-k3, MOONSHOT_API_KEY). Active: deepseek (API key), openai-codex (subscription), github-copilot (subscription: claude-sonnet-5, grok-4.7), google (API key), moonshotai (API key: kimi-k3), ollama (GLM), hetzner-inference (beta), nvidia (GLM-5.3 fallback).",
   "routes": {
     "subscription-reasoning": {
       "name": "Reasoning & Agentic Router",
@@ -19,33 +19,34 @@
       "maxTokens": 128000,
       "targets": [
         {
-          "provider": "moonshotai",
-          "modelId": "kimi-k3",
-          "authProvider": "moonshotai",
-          "label": "L1: Kimi K3 (79.2 LiveBench #2 overall, #1 coding arena — 2.8T open-weight)"
+          "provider": "openai-codex",
+          "modelId": "gpt-6-astra",
+          "authProvider": "openai-codex",
+          "label": "L1: GPT-6 Astra (OpenAI Codex — ChatGPT subscription, 272K)"
+        },
+        {
+          "provider": "github-copilot",
+          "modelId": "claude-sonnet-5",
+          "authProvider": "github-copilot",
+          "label": "L2: Claude Sonnet 5 (GitHub Copilot — 85.2% SWE-bench Verified)"
         },
         {
           "provider": "deepseek",
           "modelId": "deepseek-v4-pro",
           "authProvider": "deepseek",
-          "label": "L2: DeepSeek V4 Pro (93.5% LiveCodeBench — algorithmic coding leader)"
+          "label": "L3: DeepSeek V4 Pro (93.5% LiveCodeBench — algorithmic coding leader)"
         },
         {
           "provider": "openai-codex",
           "modelId": "gpt-5.6-sol",
           "authProvider": "openai-codex",
-          "label": "L3: GPT-5.6 Sol (OpenAI flagship — 78.3 Coding Index)"
+          "label": "L4: GPT-5.6 Sol (OpenAI flagship — 77.4 Coding Index)"
         },
         {
           "provider": "google",
           "modelId": "gemini-3.1-pro-preview",
-          "label": "L4: Gemini 3.1 Pro Preview (API Key)",
+          "label": "L5: Gemini 3.1 Pro Preview (API key — per-token)",
           "billing": "per-token"
-        },
-        {
-          "provider": "ollama",
-          "modelId": "glm-5.1:cloud",
-          "label": "L5: GLM-5.1 (Ollama Cloud)"
         }
       ]
     },
@@ -57,16 +58,16 @@
       "maxTokens": 128000,
       "targets": [
         {
-          "provider": "moonshotai",
-          "modelId": "kimi-k3",
-          "authProvider": "moonshotai",
-          "label": "L1: Kimi K3 (#1 Frontend Code Arena, 79.2 LiveBench — open-weight coding leader)"
-        },
-        {
           "provider": "deepseek",
           "modelId": "deepseek-v4-pro",
           "authProvider": "deepseek",
-          "label": "L2: DeepSeek V4 Pro (93.5% LiveCodeBench — algorithmic specialist)"
+          "label": "L1: DeepSeek V4 Pro (93.5% LiveCodeBench — algorithmic specialist)"
+        },
+        {
+          "provider": "github-copilot",
+          "modelId": "claude-sonnet-5",
+          "authProvider": "github-copilot",
+          "label": "L2: Claude Sonnet 5 (GitHub Copilot — 85.2% SWE-bench Verified)"
         },
         {
           "provider": "openai-codex",
@@ -75,21 +76,38 @@
           "label": "L3: GPT-5.6 Sol (Alternative SOTA)"
         },
         {
+          "provider": "github-copilot",
+          "modelId": "grok-4.7",
+          "authProvider": "github-copilot",
+          "label": "L4: Grok 4.7 (via GitHub Copilot — budget coding $2/$6)"
+        },
+        {
+          "provider": "moonshotai",
+          "modelId": "kimi-k3",
+          "authProvider": "moonshotai",
+          "label": "L5: Kimi K3 (Moonshot API — open-weight coding leader)"
+        },
+        {
           "provider": "google",
           "modelId": "gemini-3.1-pro-preview",
-          "label": "L4: Gemini 3.1 Pro Preview (API Key Fallback)",
+          "label": "L6: Gemini 3.1 Pro Preview (API Key Fallback)",
           "billing": "per-token"
         },
         {
           "provider": "deepseek",
-          "modelId": "deepseek-v4-flash",
+          "modelId": "deepseek-flash",
           "authProvider": "deepseek",
-          "label": "L5: DeepSeek V4 Flash ($0.10/$0.20 — high throughput)"
+          "label": "L7: DeepSeek V4.1 Flash ($0.10/$0.20 — high throughput)"
         },
         {
           "provider": "ollama",
-          "modelId": "glm-5.1:cloud",
-          "label": "L6: GLM-5.1 (Ollama Cloud)"
+          "modelId": "glm-5.2:cloud",
+          "label": "L8: GLM-5.2 (Ollama Cloud)"
+        },
+        {
+          "provider": "nvidia",
+          "modelId": "z-ai/glm-5.3",
+          "label": "L9: GLM-5.3 (NVIDIA NIM — free-tier last resort)"
         }
       ]
     },
@@ -107,21 +125,15 @@
           "billing": "per-token"
         },
         {
-          "provider": "moonshotai",
-          "modelId": "kimi-k3",
-          "authProvider": "moonshotai",
-          "label": "L2: Kimi K3 (1M context, 79.2 LiveBench — research reasoning)"
-        },
-        {
           "provider": "deepseek",
-          "modelId": "deepseek-v4-flash",
+          "modelId": "deepseek-flash",
           "authProvider": "deepseek",
-          "label": "L3: DeepSeek V4 Flash (1M Context Direct)"
+          "label": "L2: DeepSeek V4.1 Flash (1M Context Direct)"
         },
         {
           "provider": "ollama",
-          "modelId": "glm-5.1:cloud",
-          "label": "L4: GLM-5.1 (Ollama Cloud)"
+          "modelId": "glm-5.2:cloud",
+          "label": "L3: GLM-5.2 (Ollama Cloud)"
         }
       ]
     },
@@ -134,26 +146,20 @@
       "targets": [
         {
           "provider": "deepseek",
-          "modelId": "deepseek-v4-flash",
+          "modelId": "deepseek-flash",
           "authProvider": "deepseek",
-          "label": "L1: DeepSeek V4 Flash (Direct API — $0.10/$0.20)"
+          "label": "L1: DeepSeek V4.1 Flash (Direct API — $0.10/$0.20)"
         },
         {
           "provider": "google",
-          "modelId": "gemini-3.6-flash",
-          "label": "L2: Gemini 3.6 Flash (API Key Fast/Cheap)",
+          "modelId": "gemini-3.8-flash",
+          "label": "L2: Gemini 3.8 Flash (API Key Fast/Cheap)",
           "billing": "per-token"
         },
         {
           "provider": "ollama",
-          "modelId": "glm-5.1:cloud",
-          "label": "L3: GLM-5.1 (Ollama Cloud)"
-        },
-        {
-          "provider": "openai-codex",
-          "modelId": "gpt-5.4-mini",
-          "authProvider": "openai-codex",
-          "label": "L4: GPT-5.4 Mini (Codex Fallback)"
+          "modelId": "glm-5.2:cloud",
+          "label": "L3: GLM-5.2 (Ollama Cloud)"
         }
       ]
     },
@@ -167,21 +173,15 @@
       "targets": [
         {
           "provider": "google",
-          "modelId": "gemini-3.6-flash",
-          "label": "L1: Gemini 3.6 Flash (API Key)",
+          "modelId": "gemini-3.8-flash",
+          "label": "L1: Gemini 3.8 Flash (API Key)",
           "billing": "per-token"
         },
         {
           "provider": "deepseek",
-          "modelId": "deepseek-v4-flash",
+          "modelId": "deepseek-flash",
           "authProvider": "deepseek",
-          "label": "L2: DeepSeek V4 Flash (Direct API)"
-        },
-        {
-          "provider": "openai-codex",
-          "modelId": "gpt-5.4-mini",
-          "authProvider": "openai-codex",
-          "label": "L3: GPT-5.4 Mini (Codex)"
+          "label": "L2: DeepSeek V4.1 Flash (Direct API)"
         }
       ]
     }
@@ -194,17 +194,16 @@
     "fast": ["auto-router/subscription-fast"],
     "gemini": [
       "google/gemini-3.1-pro-preview",
-      "google/gemini-3.6-flash"
+      "google/gemini-3.8-flash"
     ],
     "deepseek": [
       "deepseek/deepseek-v4-pro",
-      "deepseek/deepseek-v4-flash"
+      "deepseek/deepseek-flash"
     ],
     "codex": [
       "openai-codex/gpt-5.6-sol",
-      "openai-codex/gpt-5.4-mini"
+      "openai-codex/gpt-6-astra"
     ],
-    "kimi": ["moonshotai/kimi-k3"],
-    "glm": ["ollama/glm-5.1:cloud"]
+    "glm": ["ollama/glm-5.2:cloud"]
   }
 }

@@ -23,7 +23,7 @@ describe("auto-router.routes.example.json", () => {
     for (const target of googleTargets) {
       assert.equal(target.billing, "per-token");
       assert.equal(target.authProvider, undefined);
-      assert.match(String(target.modelId), /^(gemini-3\.1-pro-preview|gemini-3\.6-flash)$/);
+      assert.match(String(target.modelId), /^(gemini-3\.1-pro-preview|gemini-3\.8-flash)$/);
     }
   });
 
@@ -34,7 +34,7 @@ describe("auto-router.routes.example.json", () => {
   it("keeps the gemini alias aligned with API-key models", () => {
     assert.deepEqual(exampleConfig.aliases?.gemini, [
       "google/gemini-3.1-pro-preview",
-      "google/gemini-3.6-flash",
+      "google/gemini-3.8-flash",
     ]);
   });
 });
