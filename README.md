@@ -602,6 +602,12 @@ The repository ships with opinionated defaults oriented around subscription-back
 
 You should edit `~/.pi/agent/extensions/auto-router.routes.json` to match your own environment.
 
+### Live config conventions
+
+- The live config at `~/.pi/agent/extensions/auto-router.routes.json` is authoritative and can drift from `auto-router.routes.example.json` (extra routes like `subscription-long-context`, `github-copilot` targets, `hetzner-inference`). When asked "what is configured", read the live file, not the example.
+- Keep the top-level `_comment` header up to date when adding/removing providers or routes — it's the human-readable change log for provider status.
+- Before editing the live file, make a timestamped backup beside it (`cp auto-router.routes.json auto-router.routes.json.backup-YYYYMMDD-HHMMSS`) and prefer atomic writes; the router picks up changes on `/auto-router reload`.
+
 ### Log and state directory
 
 Decision logs, event logs, budget statistics, latency history, and ratings default to `~/.pi/agent/extensions/`. Set a top-level `logDir` in `auto-router.routes.json` to move them together:

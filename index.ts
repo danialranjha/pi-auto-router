@@ -306,11 +306,11 @@ const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
     contextWindow: 200000,
     maxTokens: 128000,
     targets: [
-      { provider: "moonshotai", modelId: "kimi-k3", authProvider: "moonshotai", label: "L1: Kimi K3" },
-      { provider: "deepseek", modelId: "deepseek-v4-pro", authProvider: "deepseek", label: "L2: DeepSeek V4 Pro" },
-      { provider: "openai-codex", modelId: "gpt-5.6-sol", authProvider: "openai-codex", label: "L3: GPT-5.6 Sol" },
-      { provider: "google", modelId: "gemini-3.1-pro-preview", label: "L4: Gemini 3.1 Pro Preview", billing: "per-token" },
-      { provider: "ollama", modelId: "glm-5.1:cloud", label: "L5: GLM-5.1 (Ollama Cloud)" }
+      { provider: "openai-codex", modelId: "gpt-6-astra", authProvider: "openai-codex", label: "L1: GPT-6 Astra (Codex)" },
+      { provider: "github-copilot", modelId: "claude-sonnet-5", authProvider: "github-copilot", label: "L2: Claude Sonnet 5 (Copilot)" },
+      { provider: "deepseek", modelId: "deepseek-v4-pro", authProvider: "deepseek", label: "L3: DeepSeek V4 Pro" },
+      { provider: "openai-codex", modelId: "gpt-5.6-sol", authProvider: "openai-codex", label: "L4: GPT-5.6 Sol" },
+      { provider: "google", modelId: "gemini-3.1-pro-preview", label: "L5: Gemini 3.1 Pro Preview", billing: "per-token" }
     ]
   },
   "subscription-swe": {
@@ -320,12 +320,27 @@ const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
     contextWindow: 200000,
     maxTokens: 128000,
     targets: [
-      { provider: "moonshotai", modelId: "kimi-k3", authProvider: "moonshotai", label: "L1: Kimi K3" },
-      { provider: "deepseek", modelId: "deepseek-v4-pro", authProvider: "deepseek", label: "L2: DeepSeek V4 Pro" },
+      { provider: "deepseek", modelId: "deepseek-v4-pro", authProvider: "deepseek", label: "L1: DeepSeek V4 Pro" },
+      { provider: "github-copilot", modelId: "claude-sonnet-5", authProvider: "github-copilot", label: "L2: Claude Sonnet 5 (Copilot)" },
       { provider: "openai-codex", modelId: "gpt-5.6-sol", authProvider: "openai-codex", label: "L3: GPT-5.6 Sol" },
-      { provider: "google", modelId: "gemini-3.1-pro-preview", label: "L4: Gemini 3.1 Pro Preview", billing: "per-token" },
-      { provider: "deepseek", modelId: "deepseek-v4-flash", authProvider: "deepseek", label: "L5: DeepSeek V4 Flash" },
-      { provider: "ollama", modelId: "glm-5.1:cloud", label: "L6: GLM-5.1 (Ollama Cloud)" }
+      { provider: "github-copilot", modelId: "grok-4.7", authProvider: "github-copilot", label: "L4: Grok 4.7 (Copilot)" },
+      { provider: "moonshotai", modelId: "kimi-k3", authProvider: "moonshotai", label: "L5: Kimi K3 (Moonshot API)" },
+      { provider: "google", modelId: "gemini-3.1-pro-preview", label: "L6: Gemini 3.1 Pro Preview", billing: "per-token" },
+      { provider: "deepseek", modelId: "deepseek-flash", authProvider: "deepseek", label: "L7: DeepSeek V4.1 Flash" },
+      { provider: "ollama", modelId: "glm-5.2:cloud", label: "L8: GLM-5.2 (Ollama Cloud)" },
+      { provider: "nvidia", modelId: "z-ai/glm-5.3", label: "L9: GLM-5.3 (NVIDIA NIM fallback)" }
+    ]
+  },
+  "subscription-long-context": {
+    name: "Long-Context & Research Router",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 1000000,
+    maxTokens: 128000,
+    targets: [
+      { provider: "google", modelId: "gemini-3.1-pro-preview", label: "L1: Gemini 3.1 Pro Preview", billing: "per-token" },
+      { provider: "deepseek", modelId: "deepseek-flash", authProvider: "deepseek", label: "L2: DeepSeek V4.1 Flash" },
+      { provider: "ollama", modelId: "glm-5.2:cloud", label: "L3: GLM-5.2 (Ollama Cloud)" }
     ]
   },
   "subscription-economy": {
@@ -335,10 +350,9 @@ const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
     contextWindow: 128000,
     maxTokens: 65536,
     targets: [
-      { provider: "deepseek", modelId: "deepseek-v4-flash", authProvider: "deepseek", label: "L1: DeepSeek V4 Flash" },
-      { provider: "google", modelId: "gemini-3.6-flash", label: "L2: Gemini 3.6 Flash", billing: "per-token" },
-      { provider: "ollama", modelId: "glm-5.1:cloud", label: "L3: GLM-5.1 (Ollama Cloud)" },
-      { provider: "openai-codex", modelId: "gpt-5.4-mini", authProvider: "openai-codex", label: "L4: GPT-5.4 Mini" }
+      { provider: "deepseek", modelId: "deepseek-flash", authProvider: "deepseek", label: "L1: DeepSeek V4.1 Flash" },
+      { provider: "google", modelId: "gemini-3.8-flash", label: "L2: Gemini 3.8 Flash", billing: "per-token" },
+      { provider: "ollama", modelId: "glm-5.2:cloud", label: "L3: GLM-5.2 (Ollama Cloud)" }
     ]
   },
   "subscription-fast": {
@@ -348,9 +362,8 @@ const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
     contextWindow: 64000,
     maxTokens: 16384,
     targets: [
-      { provider: "google", modelId: "gemini-3.6-flash", label: "L1: Gemini 3.6 Flash", billing: "per-token" },
-      { provider: "deepseek", modelId: "deepseek-v4-flash", authProvider: "deepseek", label: "L2: DeepSeek V4 Flash" },
-      { provider: "openai-codex", modelId: "gpt-5.4-mini", authProvider: "openai-codex", label: "L3: GPT-5.4 Mini" }
+      { provider: "google", modelId: "gemini-3.8-flash", label: "L1: Gemini 3.8 Flash", billing: "per-token" },
+      { provider: "deepseek", modelId: "deepseek-flash", authProvider: "deepseek", label: "L2: DeepSeek V4.1 Flash" }
     ]
   }
 };
@@ -358,13 +371,13 @@ const DEFAULT_ROUTES: Record<string, RouteDefinition> = {
 const DEFAULT_ALIASES: AliasConfig = {
   reasoning: ["auto-router/subscription-reasoning"],
   swe: ["auto-router/subscription-swe"],
+  long: ["auto-router/subscription-long-context"],
   economy: ["auto-router/subscription-economy"],
   fast: ["auto-router/subscription-fast"],
-  gemini: ["google/gemini-3.1-pro-preview", "google/gemini-3.6-flash"],
-  deepseek: ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"],
-  codex: ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.4-mini"],
-  kimi: ["moonshotai/kimi-k3"],
-  glm: ["ollama/glm-5.1:cloud"]
+  gemini: ["google/gemini-3.1-pro-preview", "google/gemini-3.8-flash"],
+  deepseek: ["deepseek/deepseek-v4-pro", "deepseek/deepseek-flash"],
+  codex: ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-6-astra"],
+  glm: ["ollama/glm-5.2:cloud"]
 };
 
 let routesCache: Record<string, RouteDefinition> = DEFAULT_ROUTES;
