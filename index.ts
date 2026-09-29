@@ -42,6 +42,7 @@ import { shouldFailOverThoughtSignatureError } from "./src/signature-failover.ts
 import { isTruncatedStop, truncatedStopMessage } from "./src/terminal-stop.ts";
 import { detectValidationTrace } from "./src/validation-outcome-detector.ts";
 import { buildSweSubtaskHeuristic } from "./src/swe-subtask-heuristics.ts";
+import { applyCopilotEndpoint } from "./src/copilot-endpoint.ts";
 import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, BudgetState, QuotaWindow, PolicyRuleConfig, DecisionAttemptLog, DecisionCandidateTrace, DecisionReasoningTrace } from "./src/types.ts";
 
 const PROVIDER_ID = "auto-router";
@@ -619,7 +620,7 @@ function isRetryableError(message: any): boolean {
   // NOTE: This only matches against actual error event strings (not model text output).
   // Be conservative with single-word tokens — they're prone to false positives.
   return [
-    "429", "rate limit", "ratelimit", "too many requests",
+    "429", "421", "misdirected request", "rate limit", "ratelimit", "too many requests",
     "overloaded", "over capacity", "capacity reached", "busy",
     "temporarily unavailable", "timeout", "timed out", "econnreset", "etimedout",
     "network", "connection", "try again", "internal server error",
@@ -731,6 +732,7 @@ async function tryTarget(
   // Respect route output limits without exceeding the selected model's own limit.
   const routeDef = routesCache[outerModel.id];
   const routeMaxTokens = routeDef?.maxTokens;
+  innerModel = applyCopilotEndpoint(innerModel, token);
   const innerOptions: SimpleStreamOptions = { ...options, apiKey: token };
   if (typeof routeMaxTokens === "number" && routeMaxTokens > 0) {
     innerOptions.maxTokens = Math.min(routeMaxTokens, innerModel.maxTokens);
