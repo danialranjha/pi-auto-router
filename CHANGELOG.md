@@ -1,9 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+**Release date:** 2026-09-29
+
+### Added
+- `subscription-long-context` route and `long` alias, plus new model targets: `claude-sonnet-5` (reasoning L2 / swe L2 via GitHub Copilot), `kimi-k3` (Moonshot, swe L5), `grok-4.7` (swe L4), and `deepseek-flash` (DeepSeek V4.1) replacing the `deepseek-v4-flash` id.
+- Config-order routing mode (`sortBy: "config"`) as an alternative to adaptive latency/cost ordering.
+- pi-cache-optimizer integration: routed models and prompt/cache passthrough are exposed to the cache optimizer for shared cache prefixes.
+- Configurable router storage directory via the storage-path module.
+- Absolute quota reset-time parsing (e.g. `reset at MM-DD HH:MM:SS UTC`).
+- Virtual thinking-level map that advertises the standard `xhigh` thinking level.
 
 ### Fixed
 - Routed responses that end with `stopReason: "length"` (truncated output, e.g. a model hitting its real output ceiling) are no longer reported as successful. The router now suppresses the truncated terminal event and fails over to the next target in the route, instead of surfacing truncated output that pi core then cannot recover via compact-and-retry.
+- Gemini 3 thought-signature `400` failures are detected and failed over before substantive output.
+- Custom-provider model limits (`contextWindow` / `maxTokens`) now resolve from the model registry.
+- Providers with unknown latency are ranked by estimated cost rather than being penalized arbitrarily.
+- Quota reset times are validated before use.
+- Route output limits are enforced against each selected model's own ceiling.
+
+### Changed
+- pi peer dependencies bumped to 0.84.1.
 
 ## 0.2.4
 
