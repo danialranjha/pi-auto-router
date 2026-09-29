@@ -39,6 +39,7 @@ import { DecisionLogger } from "./src/decision-logger.ts";
 import { RouterEventLogger } from "./src/router-event-logger.ts";
 import { sanitizeContext } from "./src/context-sanitizer.ts";
 import { shouldFailOverThoughtSignatureError } from "./src/signature-failover.ts";
+import { isTruncatedStop, truncatedStopMessage } from "./src/terminal-stop.ts";
 import { detectValidationTrace } from "./src/validation-outcome-detector.ts";
 import { buildSweSubtaskHeuristic } from "./src/swe-subtask-heuristics.ts";
 import type { DecisionLogEntry, RoutingDecision, Tier, Message as RoutingMessage, UtilizationSnapshot, BillingModel, BalanceState, BudgetState, QuotaWindow, PolicyRuleConfig, DecisionAttemptLog, DecisionCandidateTrace, DecisionReasoningTrace } from "./src/types.ts";
@@ -742,6 +743,11 @@ async function tryTarget(
     for await (const event of inner) {
       if (event.type === "done") {
         lastMessage = event.message;
+        if (isTruncatedStop(lastMessage?.stopReason)) {
+          // Truncated output: suppress the terminal event so it never reaches
+          // the caller, and fail over to the next target after the loop.
+          continue;
+        }
       }
 
       const isRealContent = [
@@ -826,6 +832,10 @@ async function tryTarget(
         errorMessage: `${target.label || "Target"}: ${message}`
       }
     };
+  }
+
+  if (isTruncatedStop(lastMessage?.stopReason)) {
+    return { success: false, retryableFailure: truncatedStopMessage(target.label), ttftMs };
   }
 
   return { success: true, lastMessage, ttftMs };
