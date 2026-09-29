@@ -14,6 +14,7 @@
 
 ### Fixed
 - Routed responses that end with `stopReason: "length"` (truncated output, e.g. a model hitting its real output ceiling) are no longer reported as successful. The router now suppresses the truncated terminal event and fails over to the next target in the route, instead of surfacing truncated output that pi core then cannot recover via compact-and-retry.
+- GitHub Copilot business-seat targets now derive their seat-specific API base URL from the token's `proxy-ep` claim (`proxy.*.githubcopilot.com` → `api.*.githubcopilot.com`) instead of assuming the individual endpoint, fixing `421 Misdirected Request` failures. `421` / "misdirected request" is also treated as a retryable error for clean failover.
 - Gemini 3 thought-signature `400` failures are detected and failed over before substantive output.
 - Custom-provider model limits (`contextWindow` / `maxTokens`) now resolve from the model registry.
 - Providers with unknown latency are ranked by estimated cost rather than being penalized arbitrarily.
