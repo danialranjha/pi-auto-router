@@ -5,6 +5,9 @@ test-logic.js
 .DS_Store
 .pi/
 
+# Local backup files from atomic config edits
+*.bak-*
+
 # Local environment / secrets — never commit credentials
 .env
 .env.*
