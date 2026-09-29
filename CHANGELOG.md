@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Routed responses that end with `stopReason: "length"` (truncated output, e.g. a model hitting its real output ceiling) are no longer reported as successful. The router now suppresses the truncated terminal event and fails over to the next target in the route, instead of surfacing truncated output that pi core then cannot recover via compact-and-retry.
+
 ## 0.2.4
 
 **Release date:** 2026-08-12
