@@ -31,6 +31,7 @@ import { FeedbackTracker } from "./src/feedback-tracker.ts";
 import { buildRatingFromCompletedDecision, getMostRecentCompletedDecision, rememberCompletedDecision, type CompletedDecisionFeedbackContext } from "./src/rating-attribution.ts";
 import { PolicyEngine, buildStrategyRules, mergeHints, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
+import { getOperationalTargetKey, getOperationalCooldownKey, isOperationalFailure } from "./src/operational-health.ts";
 import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "./src/display.ts";
 import { hasUsableTargetCredentials, readAuthFile, resolveTargetApiKey } from "./src/auth.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow, supportsProviderBalance } from "./src/balance-fetcher.ts";
@@ -635,7 +636,10 @@ function isRetryableError(message: any): boolean {
 }
 
 function putOnCooldown(target: RouteTarget, reason: string, routeId?: string) {
-  cooldowns.set(getTargetKey(target, routeId), { until: Date.now() + getCooldownMs(reason), reason });
+  const key = getOperationalCooldownKey(target, routeId);
+  const until = Date.now() + getCooldownMs(reason);
+  // Concurrent failures must never shorten an existing reason-based deadline.
+  if ((cooldowns.get(key)?.until ?? 0) <= until) cooldowns.set(key, { until, reason });
 }
 
 function getHealthyTargets(routeId: string): RouteTarget[] {
@@ -644,10 +648,10 @@ function getHealthyTargets(routeId: string): RouteTarget[] {
   return (routesCache[routeId]?.targets ?? []).filter((target) => {
     if (!target) return false;
     if (!hasUsableTargetCredentials(target, auth, now)) return false;
-    const cooldown = cooldowns.get(getTargetKey(target, routeId));
+    const cooldown = cooldowns.get(getOperationalCooldownKey(target, routeId));
     if (cooldown && cooldown.until > now) return false;
-    // Circuit breaker: skip providers with an open circuit
-    if (circuitBreaker.isOpen(target.provider)) return false;
+    // Operational circuit: skip blocked targets and in-flight recovery probes
+    if (circuitBreaker.isOpen(getOperationalTargetKey(target))) return false;
     return true;
   });
 }
@@ -657,7 +661,7 @@ function formatCooldowns(routeId?: string): string {
   const targets = routeId ? routesCache[routeId]?.targets ?? [] : Object.values(routesCache).flatMap((route) => route.targets);
   const lines = targets
     .map((target) => {
-      const state = cooldowns.get(getTargetKey(target, routeId));
+      const state = cooldowns.get(getOperationalCooldownKey(target, routeId));
       if (!state || state.until <= now) return null;
       return `${target.label}: cooldown ${formatRemainingMs(state.until - now)}`;
     })
@@ -686,6 +690,16 @@ function buildCombinedError(model: Model<Api>, routeId: string, errors: string[]
   };
 }
 
+type TargetAttemptResult = {
+  success: boolean;
+  retryableFailure?: string;
+  operationalFailure?: boolean;
+  skipped?: boolean;
+  terminalError?: AssistantMessage;
+  lastMessage?: AssistantMessage;
+  ttftMs?: number;
+};
+
 async function tryTarget(
   outer: AssistantMessageEventStream,
   outerModel: Model<Api>,
@@ -693,7 +707,54 @@ async function tryTarget(
   context: Context,
   options: SimpleStreamOptions | undefined,
   routingScope: { sessionId?: string; requestId: string },
-): Promise<{ success: boolean; retryableFailure?: string; terminalError?: AssistantMessage; lastMessage?: AssistantMessage; ttftMs?: number }> {
+  onAttempt?: () => void,
+): Promise<TargetAttemptResult> {
+  // Recheck at the transport boundary: candidate lists may be stale after
+  // another request fails or acquires a probe (including shadow/fallback lists).
+  const cooldown = cooldowns.get(getOperationalCooldownKey(target, outerModel.id));
+  if (options?.signal?.aborted || (cooldown && cooldown.until > Date.now())) {
+    return { success: false, skipped: true };
+  }
+  const permit = circuitBreaker.acquire(getOperationalTargetKey(target));
+  if (!permit) return { success: false, skipped: true };
+  try {
+    onAttempt?.();
+    const result = await tryTargetOnce(outer, outerModel, target, context, options, routingScope, permit.isCurrent);
+    if (!options?.signal?.aborted) {
+      if (result.success) permit.success();
+      else if (result.operationalFailure) {
+        permit.failure(Math.max(
+          cooldowns.get(getOperationalCooldownKey(target, outerModel.id))?.until ?? 0,
+          Date.now() + getCooldownMs(result.retryableFailure ?? result.terminalError?.errorMessage),
+        ));
+      }
+    }
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!options?.signal?.aborted && isOperationalFailure(message)) {
+      permit.failure(Date.now() + getCooldownMs(message));
+    }
+    throw error;
+  } finally {
+    permit.release();
+  }
+}
+
+async function tryTargetOnce(
+  outer: AssistantMessageEventStream,
+  outerModel: Model<Api>,
+  target: RouteTarget,
+  context: Context,
+  options: SimpleStreamOptions | undefined,
+  routingScope: { sessionId?: string; requestId: string },
+  isCurrentAttempt: () => boolean,
+): Promise<TargetAttemptResult> {
+  const coolDown = (message: string) => {
+    // A reset during an in-flight request also invalidates late local cooldown
+    // writes, not just its circuit completion.
+    if (isCurrentAttempt()) putOnCooldown(target, message, outerModel.id);
+  };
   activeTargetByRoute.set(outerModel.id, describeTarget(target));
   refreshStatus(outerModel.id);
   const auth = readAuthFile(AUTH_PATH);
@@ -701,7 +762,7 @@ async function tryTarget(
 
   if (!hasUsableTargetCredentials(target, auth)) {
     const message = `${target.label}: no valid credentials in auth.json or provider environment variables`;
-    putOnCooldown(target, message, outerModel.id);
+    coolDown(message);
     return { success: false, retryableFailure: message };
   }
 
@@ -710,7 +771,7 @@ async function tryTarget(
     innerModel = getInnerModel(target, context);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    putOnCooldown(target, message, outerModel.id);
+    coolDown(message);
     return { success: false, retryableFailure: `${target.label || "Target"}: ${message}` };
   }
   const buffered: any[] = [];
@@ -770,11 +831,11 @@ async function tryTarget(
       if (event.type === "error") {
         const message = event.error?.errorMessage || `${target.label || "Target"}: unknown error`;
         const signatureFailover = shouldFailOverThoughtSignatureError(message, sawSubstantive);
-        if (signatureFailover || (!sawSubstantive && isRetryableError(message))) {
+        if (!options?.signal?.aborted && (signatureFailover || (!sawSubstantive && isRetryableError(message)))) {
           // Signature failures belong to this conversation history, not provider health.
           // Fail over this request without globally cooling down an otherwise healthy target.
-          if (!signatureFailover) putOnCooldown(target, message, outerModel.id);
-          return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, ttftMs };
+          if (!signatureFailover) coolDown(message);
+          return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, operationalFailure: isOperationalFailure(message), ttftMs };
         }
         flush();
         outer.push({
@@ -788,6 +849,7 @@ async function tryTarget(
         });
         return {
           success: false,
+          operationalFailure: isOperationalFailure(message),
           ttftMs,
           terminalError: {
             ...(event.error || {}),
@@ -808,9 +870,9 @@ async function tryTarget(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const signatureFailover = shouldFailOverThoughtSignatureError(message, sawSubstantive);
-    if (signatureFailover || (!sawSubstantive && isRetryableError(message))) {
-      if (!signatureFailover) putOnCooldown(target, message, outerModel.id);
-      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, ttftMs };
+    if (!options?.signal?.aborted && (signatureFailover || (!sawSubstantive && isRetryableError(message)))) {
+      if (!signatureFailover) coolDown(message);
+      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, operationalFailure: isOperationalFailure(message), ttftMs };
     }
     throw error;
   }
@@ -820,12 +882,13 @@ async function tryTarget(
   if (lastMessage?.stopReason === "error" || lastMessage?.errorMessage) {
     const message = lastMessage.errorMessage || "Unknown terminal error";
     const signatureFailover = shouldFailOverThoughtSignatureError(message, sawSubstantive);
-    if (signatureFailover || (!sawSubstantive && isRetryableError(message))) {
-      if (!signatureFailover) putOnCooldown(target, message, outerModel.id);
-      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, ttftMs };
+    if (!options?.signal?.aborted && (signatureFailover || (!sawSubstantive && isRetryableError(message)))) {
+      if (!signatureFailover) coolDown(message);
+      return { success: false, retryableFailure: `${target.label || "Target"}: ${message}`, operationalFailure: isOperationalFailure(message), ttftMs };
     }
     return {
       success: false,
+      operationalFailure: isOperationalFailure(message),
       ttftMs,
       terminalError: {
         ...lastMessage,
@@ -945,11 +1008,11 @@ function buildCandidateTrace(
     let status: DecisionCandidateTrace["status"] = "eligible";
     let bucket: DecisionCandidateTrace["bucket"] | undefined;
     if (!healthyKeys.has(key)) {
-      const cooldown = cooldowns.get(getTargetKey(target, routeId));
+      const cooldown = cooldowns.get(getOperationalCooldownKey(target, routeId));
       if (cooldown && cooldown.until > Date.now()) {
         status = "cooldown";
         reasons.push(cooldown.reason);
-      } else if (circuitBreaker.isOpen(target.provider)) {
+      } else if (circuitBreaker.isOpen(getOperationalTargetKey(target))) {
         status = "circuit_open";
         reasons.push("circuit breaker open");
       } else if (!healthCache.isHealthy(target.provider, target.authProvider)) {
@@ -1242,10 +1305,10 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         requirements,
         capabilities: (t) => lookupCapabilities(t, context),
         isOnCooldown: (t) => {
-          const c = cooldowns.get(getTargetKey(t, routeId));
+          const c = cooldowns.get(getOperationalCooldownKey(t, routeId));
           if (c && c.until > Date.now()) return true;
-          // Circuit breaker: skip providers with an open circuit
-          if (circuitBreaker.isOpen(t.provider)) return true;
+          // Operational circuit: skip blocked targets and in-flight recovery probes
+          if (circuitBreaker.isOpen(getOperationalTargetKey(t))) return true;
           return false;
         },
         isHealthy: (t) => healthCache.isHealthy(t.provider, t.authProvider),
@@ -1289,7 +1352,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
       const legacyTargets = shadowMode
         ? healthy.filter((t) => {
             if (!getProviderHealthCache().isHealthy(t.provider, t.authProvider)) return false;
-            const c = cooldowns.get(getTargetKey(t, routeId));
+            const c = cooldowns.get(getOperationalCooldownKey(t, routeId));
             return !c || c.until <= Date.now();
           })
         : null;
@@ -1515,16 +1578,18 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
 
       const routingScope = { sessionId: options?.sessionId ?? activeSessionId, requestId };
       for (const [attemptIndex, target] of targets.entries()) {
-        cacheOptimizerRouting.publish(routeId, target, "planned", routingScope);
-        lastAttemptByRoute.set(routeId, target.label);
-        emitRouterEvent("routing.attempt", { requestId, conversationId, routeId }, {
-          index: attemptIndex + 1,
-          provider: target.provider,
-          modelId: target.modelId,
-          label: target.label,
-        });
         const t0 = Date.now();
-        const result = await tryTarget(outer, model, target, context, options, routingScope);
+        const result = await tryTarget(outer, model, target, context, options, routingScope, () => {
+          cacheOptimizerRouting.publish(routeId, target, "planned", routingScope);
+          lastAttemptByRoute.set(routeId, target.label);
+          emitRouterEvent("routing.attempt", { requestId, conversationId, routeId }, {
+            index: attemptIndex + 1,
+            provider: target.provider,
+            modelId: target.modelId,
+            label: target.label,
+          });
+        });
+        if (result.skipped) continue;
         if (result.success) {
           cacheOptimizerRouting.publish(routeId, target, "success", routingScope);
           const elapsed = Date.now() - t0;
@@ -1550,7 +1615,6 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
             costUsd: usageMetrics.costUsd,
           });
           latencyTracker.recordLatency(target.provider, elapsed);
-          circuitBreaker.recordSuccess(target.provider);
           try { latencyTracker.save(); } catch { /* ignore */ }
           if (result.lastMessage?.usage) {
             try {
@@ -1649,7 +1713,6 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         cacheOptimizerRouting.publish(routeId, target, "failed", routingScope);
         if (result.retryableFailure) {
           const elapsed = Date.now() - t0;
-          circuitBreaker.recordFailure(target.provider);
           errors.push(result.retryableFailure);
           finalSelectedTarget = target.label;
           finalActualTarget = target;
@@ -2019,7 +2082,7 @@ function routeSummary(routeId: string): string {
   const lines = (route.targets || []).map((target, index) => {
     if (!target) return `${index + 1}. [Invalid Target]`;
     const key = getTargetKey(target, routeId);
-    const cooldown = cooldowns.get(key);
+    const cooldown = cooldowns.get(getOperationalCooldownKey(target, routeId));
     const cooldownText = cooldown && cooldown.until > Date.now() ? ` | cooldown ${formatRemainingMs(cooldown.until - Date.now())} (Reason: ${cooldown.reason})` : "";
     const authText = target.authProvider ? `auth=${target.authProvider}` : "auth=builtin";
     const healthText = healthySet.has(key)
@@ -2643,16 +2706,16 @@ export default function (pi: ExtensionAPI) {
         const dump = circuitBreaker.dump();
         const providers = Object.keys(dump);
         if (providers.length === 0) {
-          ctx.ui.notify("Circuit breaker: no providers have been tracked yet (no failures recorded).", "info");
+          ctx.ui.notify("Circuit breaker: no targets have been tracked yet.", "info");
           return;
         }
         const lines: string[] = ["Circuit breaker state:"];
         for (const [provider, state] of Object.entries(dump)) {
           const icon = state.state === "open" ? "🔴" : state.state === "half-open" ? "🟡" : "🟢";
           const openedInfo = state.openedAt > 0 ? ` (opened ${Math.round((Date.now() - state.openedAt) / 1000)}s ago)` : "";
-          lines.push(`  ${icon} ${provider.padEnd(22)} ${state.state.padEnd(10)} failures=${state.failures}${openedInfo}`);
+          lines.push(`  ${icon} ${provider.padEnd(22)} ${state.state.padEnd(10)} failures=${state.failures}${openedInfo}${state.retryAt > Date.now() ? ` | retry in ${formatRemainingMs(state.retryAt - Date.now())}` : state.probeInFlight ? " | probe in flight" : ""}`);
         }
-        lines.push("", `Threshold: ${circuitBreaker.failureThreshold} failures within ${circuitBreaker.windowMs / 1000}s window, ${circuitBreaker.cooldownMs / 1000}s cooldown`);
+        lines.push("", `Threshold: ${circuitBreaker.failureThreshold} consecutive operational failures; cooldowns: ${circuitBreaker.cooldownStepsMs.map((ms) => formatRemainingMs(ms)).join(" → ")}`);
         lines.push("Reset: /auto-router reset");
         ctx.ui.notify(lines.join("\n"), "info");
         return;
