@@ -245,3 +245,46 @@ describe("last-session cleanup", () => {
     assert.deepEqual(h.ended, ["main"]);
   });
 });
+
+
+describe("request session lifetimes", () => {
+  it("keeps a request live across context updates and sibling shutdown", () => {
+    const h = harness();
+    const main = fakeSession("main");
+    const child = fakeSession("child");
+    h.sessions.update(main.ctx());
+    const active = h.sessions.captureLiveness("main")!;
+    h.sessions.update(child.ctx());
+    h.sessions.update(main.ctx());
+    h.shutdown(child.ctx());
+    assert.equal(active(), true);
+    h.shutdown(main.ctx());
+    assert.equal(active(), false);
+    h.sessions.update(fakeSession("main").ctx());
+    assert.equal(active(), false, "same ID cannot revive an ended lifetime");
+  });
+
+  it("prunes stale origins on liveness check and keeps unknown callers unguarded", () => {
+    const h = harness();
+    assert.equal(h.sessions.captureLiveness(), undefined);
+    assert.equal(h.sessions.captureLiveness("unknown"), undefined);
+    const old = fakeSession("old");
+    h.sessions.update(old.ctx());
+    const active = h.sessions.captureLiveness("old")!;
+    old.invalidate();
+    assert.equal(active(), false);
+    assert.equal(h.adapter(), undefined);
+    assert.deepEqual(h.ended, ["old"]);
+  });
+
+  it("replaces a stale runner with the same session ID without reviving old requests", () => {
+    const sessions = createSessionTracker();
+    const old = fakeSession("same-id");
+    sessions.update(old.ctx());
+    const oldRequest = sessions.captureLiveness("same-id")!;
+    old.invalidate();
+    sessions.update(fakeSession("same-id").ctx());
+    assert.equal(oldRequest(), false);
+    assert.equal(sessions.captureLiveness("same-id")!(), true);
+  });
+});

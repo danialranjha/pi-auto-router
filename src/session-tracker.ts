@@ -30,18 +30,22 @@ export function createSessionTracker(
   onEmpty: () => void = () => {},
 ) {
   // Insertion order is recency order: update() moves a session to the end.
-  const live = new Map<string, any>();
+  const live = new Map<string, { ctx: any; active: boolean }>();
   let lastRegistry: any;
 
   const remove = (id: string) => {
-    if (live.delete(id)) onEnd(id);
+    const entry = live.get(id);
+    if (!entry) return;
+    entry.active = false;
+    live.delete(id);
+    onEnd(id);
   };
 
   // pi-subagents can dispose a child without session_shutdown. Its context
   // then throws, or it reports a different session id after a replacement.
   const prune = () => {
-    for (const [id, ctx] of live) {
-      if (sessionIdOf(ctx) !== id) remove(id);
+    for (const [id, entry] of live) {
+      if (sessionIdOf(entry.ctx) !== id) remove(id);
     }
   };
 
@@ -58,10 +62,13 @@ export function createSessionTracker(
       const hadSessions = live.size > 0;
       const registry = read(() => ctx?.modelRegistry);
       if (registry) lastRegistry = registry;
+      prune();
       const id = sessionIdOf(ctx);
       if (id) {
+        const entry = live.get(id) ?? { ctx, active: true };
+        entry.ctx = ctx;
         live.delete(id);
-        live.set(id, ctx);
+        live.set(id, entry);
       }
       // Finish replacement before notifying: a new live session keeps the adapter.
       settle(hadSessions);
@@ -82,7 +89,7 @@ export function createSessionTracker(
 
     context(): any {
       pruneAndSettle();
-      return [...live.values()].at(-1);
+      return [...live.values()].at(-1)?.ctx;
     },
 
     sessionId(): string | undefined {
@@ -93,6 +100,17 @@ export function createSessionTracker(
     hasLiveSessions(): boolean {
       pruneAndSettle();
       return live.size > 0;
+    },
+
+    /** Bind a request to its session lifetime; unknown callers stay unguarded. */
+    captureLiveness(id?: string): (() => boolean) | undefined {
+      pruneAndSettle();
+      const entry = id ? live.get(id) : undefined;
+      if (!entry) return undefined;
+      return () => {
+        pruneAndSettle();
+        return entry.active;
+      };
     },
 
     /**

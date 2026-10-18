@@ -702,7 +702,7 @@ async function tryTarget(
   target: RouteTarget,
   context: Context,
   options: SimpleStreamOptions | undefined,
-  routingScope: { sessionId?: string; requestId: string },
+  routingScope: { sessionId?: string; requestId: string; isActive?: () => boolean },
 ): Promise<{ success: boolean; retryableFailure?: string; terminalError?: AssistantMessage; lastMessage?: AssistantMessage; ttftMs?: number }> {
   activeTargetByRoute.set(outerModel.id, describeTarget(target));
   refreshStatus(outerModel.id);
@@ -737,7 +737,9 @@ async function tryTarget(
     flushed = true;
   };
 
-  cacheOptimizerRouting.publish(outerModel.id, target, "trying", { ...routingScope, api: innerModel.api });
+  if (routingScope.isActive?.() !== false) {
+    cacheOptimizerRouting.publish(outerModel.id, target, "trying", { ...routingScope, api: innerModel.api });
+  }
   const sanitized = sanitizeContext(context, target.provider, target.modelId, innerModel.api);
   // Respect route output limits without exceeding the selected model's own limit.
   const routeDef = routesCache[outerModel.id];
@@ -1149,6 +1151,9 @@ function emitRouterEvent<T extends Record<string, unknown>>(
 
 function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
   const outer = createAssistantMessageEventStream();
+  // Capture before any await: another session event can change the current context.
+  const sessionId = options?.sessionId ?? sessions.sessionId();
+  const isActive = sessions.captureLiveness(sessionId);
 
   (async () => {
     const routeId = model.id;
@@ -1523,9 +1528,11 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         candidates: decision.metadata.candidateTrace ?? [],
       });
 
-      const routingScope = { sessionId: options?.sessionId ?? sessions.sessionId(), requestId };
+      const routingScope = { sessionId, requestId, isActive };
       for (const [attemptIndex, target] of targets.entries()) {
-        cacheOptimizerRouting.publish(routeId, target, "planned", routingScope);
+        if (isActive?.() !== false) {
+          cacheOptimizerRouting.publish(routeId, target, "planned", routingScope);
+        }
         lastAttemptByRoute.set(routeId, target.label);
         emitRouterEvent("routing.attempt", { requestId, conversationId, routeId }, {
           index: attemptIndex + 1,
@@ -1536,7 +1543,9 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         const t0 = Date.now();
         const result = await tryTarget(outer, model, target, context, options, routingScope);
         if (result.success) {
-          cacheOptimizerRouting.publish(routeId, target, "success", routingScope);
+          if (isActive?.() !== false) {
+            cacheOptimizerRouting.publish(routeId, target, "success", routingScope);
+          }
           const elapsed = Date.now() - t0;
           const usageMetrics = extractUsageMetrics(result.lastMessage?.usage);
           finalOutcome = "success";
@@ -1656,7 +1665,9 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           outer.end();
           return;
         }
-        cacheOptimizerRouting.publish(routeId, target, "failed", routingScope);
+        if (isActive?.() !== false) {
+          cacheOptimizerRouting.publish(routeId, target, "failed", routingScope);
+        }
         if (result.retryableFailure) {
           const elapsed = Date.now() - t0;
           circuitBreaker.recordFailure(target.provider);

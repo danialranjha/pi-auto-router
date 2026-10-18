@@ -28,14 +28,18 @@ missing-model route, then verifies:
 
 | User journey | Action/result assertion |
 | --- | --- |
-| Parent continues after child exits | start parent/child, route child, shut child down, route parent; parent succeeds and child's snapshot disappears |
+| Parent continues while child exits | hold parent transport at an explicit barrier, change current-session recency and shut child down; parent retains its trying snapshot, succeeds on release, and followup routing works |
 | Missing route target | route missing model; error lists the registry's custom provider |
 | Disposal without shutdown | end parent, invalidate orphan, run next event; snapshot disappears and adapter unregisters |
+| Shutdown during own request | hold final session transport, shut down/invalidate, then complete with success, abort, or retryable failure/failover; retained adapter and later registration expose no ended snapshots |
 | Start another session | session_start, route; adapter re-registers and request succeeds |
 
 The test disables UVI, redirects `os.homedir()` before importing the extension,
 and waits (at most five seconds) for each persisted `routing.final` event after
-terminal responses before shutdown or cleanup.
+terminal responses before shutdown or cleanup. Deferred transport readiness and
+cleanup completion reject after five seconds; provider responses have a
+fifteen-second bound. Readiness is inside release protection, and response
+rejections are observed immediately while cleanup awaits completion.
 It neither reads real auth storage nor calls a provider. It simulates disposal by
 invalidating a runner; it does not reproduce a real pi-subagents timeout.
 Cleanup is lazy until another tracker operation. Session attribution remains the
@@ -52,5 +56,5 @@ Full regression tests also need HOME and `os.homedir()` redirected because older
 tracker tests write under `.pi`. Keep that runner-specific preload in task proof,
 not user configuration. Changes to this harness or lifecycle require independent
 review and new execution evidence. Real provider/network behavior, interactive
-commands, concurrent in-flight shutdown, and real subagent timeout remain
+commands and real subagent timeout remain
 uncovered by this offline recipe.
