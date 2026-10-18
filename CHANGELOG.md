@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- An in-process subagent session that ends no longer clears router state for the main session and other subagent sessions. pi gives all of these sessions one shared copy of the extension module. Each `session_shutdown` cleared the shared session context, so the next request could fail every custom-provider target with `Configured route target not found: <provider>/<model>. Available providers: none`. The same event also removed the pi-cache-optimizer adapter, cleared the cached routes of all sessions, and removed the session id from router events.
+- If no live context gives a model registry, the router uses the last registry that a context gave.
+- The router removes a session when its context becomes stale, also if pi sends no `session_shutdown`. It clears the cached routes of that session. When no session is live, it removes the pi-cache-optimizer adapter.
+- Cleanup remains lazy when disposal sends no shutdown hook. The next tracker operation also unregisters the adapter if it prunes the last session, while replacing a stale session with a live one preserves registration.
+- Requests capture their session lifetime before asynchronous routing begins. A late success, abort, or failover after shutdown cannot recreate that session's cleared cache snapshots. Other live sessions continue routing during the shutdown.
+- The `Configured route target not found` message now lists the providers of the registry that the router used. Before, it always printed `none`.
+
 ## 0.3.0
 
 **Release date:** 2026-09-29
