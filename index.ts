@@ -24,6 +24,7 @@ import { LatencyTracker } from "./src/latency-tracker.ts";
 import { compareTargets } from "./src/target-ranker.ts";
 import { orderCandidateBuckets, parseRoutingOrder, type RoutingOrder } from "./src/routing-order.ts";
 import { CacheOptimizerRouting, applyCacheOptimizerHints } from "./src/cache-optimizer-routing.ts";
+import { createSessionTracker } from "./src/session-tracker.ts";
 import { getVirtualThinkingLevelMap } from "./src/virtual-model.ts";
 import { getAutoRouterStoragePaths } from "./src/storage-paths.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
@@ -116,8 +117,11 @@ const uviHardMode = (() => {
 })();
 
 let budgetReady = false;
-let latestUiContext: any;
-let activeSessionId: string | undefined;
+// The main session and in-process subagent sessions share this module.
+const sessions = createSessionTracker(
+  (sessionId) => cacheOptimizerRouting.clearSession(sessionId),
+  () => cacheOptimizerRouting.unregisterAdapter(),
+);
 const conversationIds = new WeakMap<object, string>();
 const lastDecisionByConversation = new Map<string, { requestId: string; routeId: string; provider: string; modelId: string; timestamp: number }>();
 let recentCompletedDecisions: CompletedDecisionFeedbackContext[] = [];
@@ -541,10 +545,20 @@ function rebuildPolicyEngine(): void {
 // falls back via try/catch. Widen the signature at this boundary only.
 const getModelLoose = getModel as unknown as (provider: string, modelId: string) => Model<Api>;
 
+// A streamSimple Context carries the conversation and never a registry. Only a
+// command context, as in /auto-router test-resolve, gives one here.
+function getAvailableModels(context?: Context): Array<{ provider: string; id: string; name?: string }> {
+  try {
+    const registry = (context as any)?.modelRegistry ?? sessions.registry();
+    const models = registry?.getAvailable?.();
+    return Array.isArray(models) ? models : [];
+  } catch {
+    return [];
+  }
+}
+
 function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model<Api> | undefined {
-  const registry = (context as any)?.modelRegistry || latestUiContext?.modelRegistry;
-  const available: Array<{ provider: string; id: string; name?: string }> =
-    typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+  const available = getAvailableModels(context);
 
   // Try to find the provider even if available is empty (for built-in models)
   const provider = target.provider === "claude-agent-sdk" ? "anthropic" : target.provider;
@@ -591,8 +605,7 @@ function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model
 function getInnerModel(target: RouteTarget, context?: Context): Model<Api> {
   const model = resolveModelFromRegistry(target, context);
   if (!model) {
-    const registry = (context as any)?.modelRegistry;
-    const available = typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+    const available = getAvailableModels(context);
     const providers = Array.from(new Set(available.map((m: any) => m.provider))).join(", ");
     throw new Error(`Configured route target not found: ${target.provider}/${target.modelId}. Available providers: ${providers || "none"}`);
   }
@@ -600,10 +613,7 @@ function getInnerModel(target: RouteTarget, context?: Context): Model<Api> {
 }
 
 function getPrimaryModelLimitsFn(route: RouteDefinition): { contextWindow: number; maxTokens: number } {
-  let registryModels: any[] = [];
-  try {
-    registryModels = latestUiContext?.modelRegistry?.getAvailable?.() ?? [];
-  } catch { /* registry may be unavailable during startup */ }
+  const registryModels: any[] = getAvailableModels();
 
   return getPrimaryModelLimits(route, (provider, modelId) => {
     try {
@@ -1131,7 +1141,7 @@ function emitRouterEvent<T extends Record<string, unknown>>(
     requestId: ids.requestId,
     conversationId: ids.conversationId,
     routeId: ids.routeId,
-    sessionId: activeSessionId,
+    sessionId: sessions.sessionId(),
     version: 1,
     data,
   });
@@ -1513,7 +1523,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         candidates: decision.metadata.candidateTrace ?? [],
       });
 
-      const routingScope = { sessionId: options?.sessionId ?? activeSessionId, requestId };
+      const routingScope = { sessionId: options?.sessionId ?? sessions.sessionId(), requestId };
       for (const [attemptIndex, target] of targets.entries()) {
         cacheOptimizerRouting.publish(routeId, target, "planned", routingScope);
         lastAttemptByRoute.set(routeId, target.label);
@@ -1998,7 +2008,7 @@ function formatCircuitStatusSegment(): string {
 }
 
 function refreshStatus(routeId?: string) {
-  const ctx = latestUiContext;
+  const ctx = sessions.context();
   if (!ctx) return;
   try {
     const activeModel = ctx.model;
@@ -2108,23 +2118,20 @@ export default function (pi: ExtensionAPI) {
   triggerStartupUviRefresh();
 
   const updateUi = (ctx: any) => {
-    latestUiContext = ctx;
+    sessions.update(ctx);
     loadRoutesConfig();
     refreshStatus();
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    activeSessionId = ctx.sessionManager.getSessionId();
     cacheOptimizerRouting.register();
     updateUi(ctx);
     triggerStartupUviRefresh();
   });
-  pi.on("session_shutdown", async () => {
-    // Session-bound contexts become stale immediately after this hook returns.
-    cacheOptimizerRouting.clearSession(activeSessionId);
-    cacheOptimizerRouting.unregisterAdapter();
-    latestUiContext = undefined;
-    activeSessionId = undefined;
+  pi.on("session_shutdown", async (_event, ctx) => {
+    // A subagent session also sends this event. Remove only the state of the
+    // session that ends. The context becomes stale after this hook returns.
+    sessions.end(ctx);
   });
   pi.on("model_select", async (_event, ctx) => updateUi(ctx));
   pi.on("agent_start", async (_event, ctx) => updateUi(ctx));
