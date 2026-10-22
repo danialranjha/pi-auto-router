@@ -14,6 +14,14 @@ export type OAuthProviderId =
   | "google-gemini-cli"
   | "google-antigravity";
 
+/** OAuth providers refreshed and polled when no explicit provider filter is given. */
+export const DEFAULT_OAUTH_PROVIDERS: readonly OAuthProviderId[] = [
+  "openai-codex",
+  "anthropic",
+  "google-gemini-cli",
+  "google-antigravity",
+];
+
 export interface AuthData {
   "openai-codex"?: { access?: string; refresh?: string; expires?: number };
   anthropic?: { access?: string; refresh?: string; expires?: number };
@@ -463,7 +471,7 @@ export async function fetchAllUsages(config: FetchAllUsagesConfig = {}): Promise
 
   const oauthProviders: OAuthProviderId[] = config.providerIds && config.providerIds.length > 0
     ? Array.from(new Set(config.providerIds))
-    : ["openai-codex", "anthropic", "google-gemini-cli", "google-antigravity"];
+    : [...DEFAULT_OAUTH_PROVIDERS];
   const refreshed = await ensureFreshAuthForProviders(oauthProviders, { ...config, auth, authFile });
   const authData = refreshed.auth ?? auth;
 

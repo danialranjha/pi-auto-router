@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { DEFAULT_OAUTH_PROVIDERS } from "./quota-fetcher.ts";
 import type { RouteTarget } from "./types.ts";
 
 export type AuthEntry = {
@@ -39,6 +40,44 @@ export function getValidStoredCredential(
 
 /** Backwards-compatible name for callers that only expect OAuth access tokens. */
 export const getValidAccessToken = getValidStoredCredential;
+
+/** Auth storage keys whose OAuth credentials are refreshed before routing. */
+export const REFRESHABLE_OAUTH_AUTH_KEYS: readonly string[] = DEFAULT_OAUTH_PROVIDERS;
+
+/** Common non-OAuth provider names that users pair with OAuth credentials by mistake. */
+const OAUTH_AUTH_KEY_SUGGESTIONS: Record<string, string> = {
+  openai: "openai-codex",
+};
+
+function isOAuthEntry(entry: AuthEntry): boolean {
+  return entry.type === "oauth" || typeof entry.refresh === "string";
+}
+
+/**
+ * Explain why an authProvider's stored OAuth credential will stop working on expiry.
+ * Returns undefined when the key is refreshable, absent, not OAuth-shaped, or has an API key fallback.
+ */
+export function describeUnrefreshableOAuthProvider(authProvider: string, auth: AuthData): string | undefined {
+  if (REFRESHABLE_OAUTH_AUTH_KEYS.includes(authProvider)) return undefined;
+  const entry = auth[authProvider];
+  if (!entry || entry.key || !isOAuthEntry(entry)) return undefined;
+  const suggestion = OAUTH_AUTH_KEY_SUGGESTIONS[authProvider];
+  const fix = suggestion
+    ? `use authProvider "${suggestion}" (re-authenticate with /login if needed)`
+    : `use one of: ${REFRESHABLE_OAUTH_AUTH_KEYS.join(", ")}`;
+  return `authProvider "${authProvider}" has OAuth credentials that auto-router cannot refresh; targets using it are dropped once the token expires. To fix, ${fix}`;
+}
+
+/** Deduplicated unrefreshable-OAuth diagnostics for a set of route targets. */
+export function collectUnrefreshableOAuthDiagnostics(
+  targets: Array<Pick<RouteTarget, "authProvider">>,
+  auth: AuthData,
+): string[] {
+  const keys = new Set(targets.map((t) => t.authProvider).filter((k): k is string => Boolean(k)));
+  return Array.from(keys)
+    .map((key) => describeUnrefreshableOAuthProvider(key, auth))
+    .filter((msg): msg is string => Boolean(msg));
+}
 
 const CANONICAL_PROVIDER_ENV_VARS: Record<string, string[]> = {
   google: ["GEMINI_API_KEY"],
