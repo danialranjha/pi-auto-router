@@ -9,6 +9,7 @@
 - Cleanup remains lazy when disposal sends no shutdown hook. The next tracker operation also unregisters the adapter if it prunes the last session, while replacing a stale session with a live one preserves registration.
 - Requests capture their session lifetime before asynchronous routing begins. A late success, abort, or failover after shutdown cannot recreate that session's cleared cache snapshots. Other live sessions continue routing during the shutdown.
 - The `Configured route target not found` message now lists the providers of the registry that the router used. Before, it always printed `none`.
+- A route with an `authProvider` that holds OAuth credentials the router cannot refresh no longer fails without an explanation. One example is `authProvider: "openai"` with a ChatGPT login: pi treats `openai` as an API-key provider and stores ChatGPT OAuth under `openai-codex`. Before, the target worked until the token expired and was then dropped, which could end in `no healthy route targets available`. The router now shows a warning in `/auto-router` status, list, show and reload, and adds it to the empty-route error. For `openai` the warning suggests `openai-codex`. The default OAuth refresh list is now shared with the credential check so that the two cannot drift apart. (#22)
 
 ## 0.3.0
 

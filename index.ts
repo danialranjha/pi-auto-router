@@ -33,7 +33,7 @@ import { buildRatingFromCompletedDecision, getMostRecentCompletedDecision, remem
 import { PolicyEngine, buildStrategyRules, mergeHints, type StrategyRule } from "./src/policy-engine.ts";
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
 import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "./src/display.ts";
-import { hasUsableTargetCredentials, readAuthFile, resolveTargetApiKey } from "./src/auth.ts";
+import { collectUnrefreshableOAuthDiagnostics, hasUsableTargetCredentials, readAuthFile, resolveTargetApiKey } from "./src/auth.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow, supportsProviderBalance } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -431,6 +431,21 @@ function getRelevantOAuthProviders(): Array<"openai-codex" | "anthropic" | "goog
     }
   }
   return Array.from(providers);
+}
+
+/** Config error plus auth diagnostics that depend on the current auth file, for UI warnings. */
+function getConfigWarning(): string | undefined {
+  const targets = Object.values(routesCache).flatMap((route) => route.targets);
+  const warnings = [
+    ...(configError ? [configError] : []),
+    ...collectUnrefreshableOAuthDiagnostics(targets, readAuthFile(AUTH_PATH)),
+  ];
+  return warnings.length > 0 ? warnings.join("\n") : undefined;
+}
+
+function formatConfigWarning(separator: string): string {
+  const warning = getConfigWarning();
+  return warning ? `${separator}Warning: ${warning}` : "";
 }
 
 function syncQuotaProviderFilter(): void {
@@ -1341,6 +1356,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         if (auditedRejections.length > 0) {
           parts.push(`budget exhausted (${auditedRejections.join("; ")})`);
         }
+        parts.push(...collectUnrefreshableOAuthDiagnostics(routeTargets, readAuthFile(AUTH_PATH)));
         const reason = parts.length > 0 ? parts.join(" / ") : "no healthy route targets available";
         outer.push({ type: "error", reason: "error", error: buildCombinedError(model, routeId, [reason]) });
         outer.end();
@@ -2807,7 +2823,8 @@ export default function (pi: ExtensionAPI) {
       if (subcommand === "reload") {
         rebuildProvider(pi);
         updateUi(ctx);
-        ctx.ui.notify(`Reloaded auto-router config from ${ROUTES_PATH}${configError ? `\nWarning: ${configError}` : ""}`, configError ? "warning" : "info");
+        const warning = getConfigWarning();
+        ctx.ui.notify(`Reloaded auto-router config from ${ROUTES_PATH}${warning ? `\nWarning: ${warning}` : ""}`, warning ? "warning" : "info");
         return;
       }
 
@@ -2817,7 +2834,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify([
           `Active route: ${activeRouteId ?? "none"}`,
           activeRouteId ? getStatusLine(activeRouteId) : "Select an auto-router model via /model to use it.",
-          configError ? `\nWarning: ${configError}` : "",
+          formatConfigWarning("\n"),
           "\nConfigured routes:\n",
           ...routeLines,
           "\nAliases:\n",
@@ -2832,7 +2849,7 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("Usage: /auto-router show <routeId>", "error");
           return;
         }
-        ctx.ui.notify(`${routeSummary(routeId)}${configError ? `\n\nWarning: ${configError}` : ""}`, routesCache[routeId] ? "info" : "error");
+        ctx.ui.notify(`${routeSummary(routeId)}${formatConfigWarning("\n\n")}`, routesCache[routeId] ? "info" : "error");
         return;
       }
 
@@ -2898,7 +2915,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify([
         `Active route: ${activeRouteId ?? "none"}`,
         activeRouteId ? getStatusLine(activeRouteId) : "Select an auto-router model via /model to use it.",
-        configError ? `\nWarning: ${configError}` : "",
+        formatConfigWarning("\n"),
         "",
         "Commands:",
         "/auto-router status",

@@ -4,13 +4,18 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  collectUnrefreshableOAuthDiagnostics,
+  describeUnrefreshableOAuthProvider,
   getValidAccessToken,
   hasUsableTargetCredentials,
   providerApiKeyEnvVars,
   readAuthFile,
   resolveProviderApiKeyFromEnv,
   resolveTargetApiKey,
+  REFRESHABLE_OAUTH_AUTH_KEYS,
+  type AuthData,
 } from "../src/auth.ts";
+import { DEFAULT_OAUTH_PROVIDERS, ensureFreshAuthForProviders } from "../src/quota-fetcher.ts";
 
 describe("readAuthFile", () => {
   it("returns parsed auth data", () => {
@@ -141,5 +146,67 @@ describe("hasUsableTargetCredentials", () => {
   it("allows subscription targets that rely on provider-managed authentication", () => {
     const target = { provider: "ollama", billing: "subscription" as const };
     assert.equal(hasUsableTargetCredentials(target, {}, 10_000, () => undefined), true);
+  });
+});
+
+describe("unrefreshable OAuth authProvider diagnostics (#22)", () => {
+  const now = 10_000;
+  const oauthEntry = (expires: number) => ({ type: "oauth", access: "synthetic-access", refresh: "synthetic-refresh", expires });
+
+  it("diagnoses an OAuth entry stored under openai and suggests openai-codex", () => {
+    const msg = describeUnrefreshableOAuthProvider("openai", { openai: oauthEntry(now + 60_000) });
+    assert.ok(msg);
+    assert.match(msg, /authProvider "openai"/);
+    assert.match(msg, /authProvider "openai-codex"/);
+  });
+
+  it("is silent for refreshable keys, API-key entries, and missing entries", () => {
+    assert.equal(describeUnrefreshableOAuthProvider("openai-codex", { "openai-codex": oauthEntry(now) }), undefined);
+    assert.equal(describeUnrefreshableOAuthProvider("openai", { openai: { type: "api_key", key: "synthetic-key" } }), undefined);
+    assert.equal(describeUnrefreshableOAuthProvider("openai", { openai: { ...oauthEntry(now), key: "synthetic-key" } }), undefined);
+    assert.equal(describeUnrefreshableOAuthProvider("deepseek", { deepseek: { access: "synthetic-access" } }), undefined);
+    assert.equal(describeUnrefreshableOAuthProvider("openai", {}), undefined);
+  });
+
+  it("lists supported providers when there is no known suggestion", () => {
+    const msg = describeUnrefreshableOAuthProvider("my-oauth", { "my-oauth": oauthEntry(now) });
+    assert.match(msg ?? "", /openai-codex, anthropic, google-gemini-cli, google-antigravity/);
+  });
+
+  it("deduplicates diagnostics across route targets", () => {
+    const auth = { openai: oauthEntry(now), "openai-codex": oauthEntry(now) };
+    const targets = [{ authProvider: "openai" }, { authProvider: "openai" }, { authProvider: "openai-codex" }, {}];
+    assert.equal(collectUnrefreshableOAuthDiagnostics(targets, auth).length, 1);
+  });
+
+  it("stays in sync with the providers the default refresh path covers", () => {
+    assert.deepEqual([...REFRESHABLE_OAUTH_AUTH_KEYS], [...DEFAULT_OAUTH_PROVIDERS]);
+  });
+
+  it("openai OAuth entry is eligible before expiry, skipped by refresh, and dropped after expiry; openai-codex keeps working", async () => {
+    const target = { provider: "openai", authProvider: "openai", billing: "subscription" as const };
+    const codexTarget = { provider: "openai-codex", authProvider: "openai-codex", billing: "subscription" as const };
+    const auth = { openai: oauthEntry(now + 1_000), "openai-codex": oauthEntry(now + 1_000) };
+    const noEnv = () => undefined;
+
+    assert.equal(hasUsableTargetCredentials(target, auth, now, noEnv), true);
+
+    const later = now + 10 * 60_000;
+    const refreshedIds: string[] = [];
+    const refreshed = await ensureFreshAuthForProviders([...DEFAULT_OAUTH_PROVIDERS], {
+      auth: auth as any,
+      nowMs: later,
+      persist: false,
+      oauthResolver: async (providerId) => {
+        refreshedIds.push(providerId);
+        return { apiKey: "synthetic-new", newCredentials: { access: "synthetic-new", expires: later + 60_000 } };
+      },
+    });
+    const nextAuth = refreshed.auth as AuthData;
+
+    assert.deepEqual(refreshedIds, ["openai-codex"]);
+    assert.equal(hasUsableTargetCredentials(codexTarget, nextAuth, later, noEnv), true);
+    assert.equal(hasUsableTargetCredentials(target, nextAuth, later, noEnv), false);
+    assert.equal(collectUnrefreshableOAuthDiagnostics([target, codexTarget], nextAuth).length, 1);
   });
 });
