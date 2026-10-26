@@ -187,7 +187,7 @@ For Gemini API-key routes, use your installed Gemini provider id (examples here 
 - `/auto-router uvi [show|enable|disable|refresh]` — view/manage Utilization Velocity Index monitoring
 - `/auto-router shadow [show|enable|disable]` — run pipeline in shadow mode (log but don't change routing)
 - `/auto-router rules` — show active policy rules and last applied strategy hints
-- `/auto-router circuit` — show circuit breaker state for all providers
+- `/auto-router circuit` — show operational circuit state for each provider/model/auth identity
 - `/auto-router reload`
 - `/auto-router reset` — clears cooldowns, decision history, and budget warnings
 
@@ -708,7 +708,7 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 | `quota-fetcher.ts`        | Pulls real-time usage data from OpenAI, Anthropic, and Google OAuth quota APIs; token refresh + error handling |
 | `quota-cache.ts`          | TTL-gated cache for quota snapshots; batches fetches, emits per-provider `UtilizationSnapshot`       |
 | `health-check.ts`         | Provider health cache — verifies OAuth tokens; independent of UVI; feeds `isHealthy` into constraint solver |
-| `circuit-breaker.ts`      | Circuit breaker state machine (closed→open→half-open) for repeatedly failing providers; `/auto-router circuit` command + status line segment |
+| `circuit-breaker.ts`      | Circuit breaker state machine (closed→open→half-open) for repeatedly failing targets; `/auto-router circuit` command + status line segment |
 | `candidate-partitioner.ts`| Partitions candidates into `[promoted, normal, demoted]` buckets based on budget audit + UVI; supports hard mode exclusion; cost-aware secondary tiebreaker |
 | `routing-order.ts`        | Applies adaptive or config-order sorting within UVI buckets and defines provider-hint interactions |
 | `latency-tracker.ts`      | Tracks per-provider request latency (rolling average, max 100 samples); used for performance-based ranking within UVI buckets |
@@ -728,6 +728,8 @@ The intelligent routing layer lives in `src/` and is composed of small, focused 
 7. Order candidates as `[…promoted (surplus UVI), …normal, …demoted (stressed UVI)]`; adaptive mode uses latency + cost, while config mode retains declared order within each bucket
 8. Record a `RoutingDecision` (phase, tier, target, confidence, reasoning, estimated tokens, budget remaining, hints trace)
 9. Stream from the selected target with same-request failover; circuit breaker tracks success/failure
+
+Operational failure streaks are shared across routes for the same provider/model/auth identity and survive idle gaps. After three consecutive operational failures, the target is held for 2 minutes, then 5 minutes, 30 minutes, and up to 2 hours on failed recovery attempts; longer error-specific cooldowns take precedence. Recovery allows one on-demand trial at a time. Target success or `/auto-router reset` clears the streak and escalation. Credential/input/signature errors retain their existing failover behavior without counting toward operational streaks. Circuit state is in memory and resets when the extension restarts.
 
 ## Roadmap
 
