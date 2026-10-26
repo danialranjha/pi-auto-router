@@ -24,6 +24,7 @@ import { LatencyTracker } from "./src/latency-tracker.ts";
 import { compareTargets } from "./src/target-ranker.ts";
 import { orderCandidateBuckets, parseRoutingOrder, type RoutingOrder } from "./src/routing-order.ts";
 import { CacheOptimizerRouting, applyCacheOptimizerHints } from "./src/cache-optimizer-routing.ts";
+import { createSessionTracker } from "./src/session-tracker.ts";
 import { getVirtualThinkingLevelMap } from "./src/virtual-model.ts";
 import { getAutoRouterStoragePaths } from "./src/storage-paths.ts";
 import { classifyIntent, intentToTier, type IntentResult } from "./src/intent-classifier.ts";
@@ -33,7 +34,7 @@ import { PolicyEngine, buildStrategyRules, mergeHints, type StrategyRule } from 
 import { CircuitBreaker } from "./src/circuit-breaker.ts";
 import { getOperationalTargetKey, getOperationalCooldownKey, isOperationalFailure } from "./src/operational-health.ts";
 import { parseModelSpec, describeTarget, formatHintsHuman, formatRemainingMs, getCooldownMs, parseResetAfterMs, normalizeModelToken, formatModelLine, findCaseInsensitiveKey, getPrimaryModelLimits, findModelInRegistry, validateRouteTarget, getTargetKey } from "./src/display.ts";
-import { hasUsableTargetCredentials, readAuthFile, resolveTargetApiKey } from "./src/auth.ts";
+import { collectUnrefreshableOAuthDiagnostics, hasUsableTargetCredentials, readAuthFile, resolveTargetApiKey } from "./src/auth.ts";
 import { fetchAllBalances, buildMonthlyQuotaWindow, supportsProviderBalance } from "./src/balance-fetcher.ts";
 import { aggregateProviderUVI } from "./src/uvi.ts";
 import { DecisionLogger } from "./src/decision-logger.ts";
@@ -117,8 +118,11 @@ const uviHardMode = (() => {
 })();
 
 let budgetReady = false;
-let latestUiContext: any;
-let activeSessionId: string | undefined;
+// The main session and in-process subagent sessions share this module.
+const sessions = createSessionTracker(
+  (sessionId) => cacheOptimizerRouting.clearSession(sessionId),
+  () => cacheOptimizerRouting.unregisterAdapter(),
+);
 const conversationIds = new WeakMap<object, string>();
 const lastDecisionByConversation = new Map<string, { requestId: string; routeId: string; provider: string; modelId: string; timestamp: number }>();
 let recentCompletedDecisions: CompletedDecisionFeedbackContext[] = [];
@@ -430,6 +434,21 @@ function getRelevantOAuthProviders(): Array<"openai-codex" | "anthropic" | "goog
   return Array.from(providers);
 }
 
+/** Config error plus auth diagnostics that depend on the current auth file, for UI warnings. */
+function getConfigWarning(): string | undefined {
+  const targets = Object.values(routesCache).flatMap((route) => route.targets);
+  const warnings = [
+    ...(configError ? [configError] : []),
+    ...collectUnrefreshableOAuthDiagnostics(targets, readAuthFile(AUTH_PATH)),
+  ];
+  return warnings.length > 0 ? warnings.join("\n") : undefined;
+}
+
+function formatConfigWarning(separator: string): string {
+  const warning = getConfigWarning();
+  return warning ? `${separator}Warning: ${warning}` : "";
+}
+
 function syncQuotaProviderFilter(): void {
   quotaCache.setProviderFilter(getRelevantOAuthProviders());
 }
@@ -542,10 +561,20 @@ function rebuildPolicyEngine(): void {
 // falls back via try/catch. Widen the signature at this boundary only.
 const getModelLoose = getModel as unknown as (provider: string, modelId: string) => Model<Api>;
 
+// A streamSimple Context carries the conversation and never a registry. Only a
+// command context, as in /auto-router test-resolve, gives one here.
+function getAvailableModels(context?: Context): Array<{ provider: string; id: string; name?: string }> {
+  try {
+    const registry = (context as any)?.modelRegistry ?? sessions.registry();
+    const models = registry?.getAvailable?.();
+    return Array.isArray(models) ? models : [];
+  } catch {
+    return [];
+  }
+}
+
 function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model<Api> | undefined {
-  const registry = (context as any)?.modelRegistry || latestUiContext?.modelRegistry;
-  const available: Array<{ provider: string; id: string; name?: string }> =
-    typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+  const available = getAvailableModels(context);
 
   // Try to find the provider even if available is empty (for built-in models)
   const provider = target.provider === "claude-agent-sdk" ? "anthropic" : target.provider;
@@ -592,8 +621,7 @@ function resolveModelFromRegistry(target: RouteTarget, context?: Context): Model
 function getInnerModel(target: RouteTarget, context?: Context): Model<Api> {
   const model = resolveModelFromRegistry(target, context);
   if (!model) {
-    const registry = (context as any)?.modelRegistry;
-    const available = typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+    const available = getAvailableModels(context);
     const providers = Array.from(new Set(available.map((m: any) => m.provider))).join(", ");
     throw new Error(`Configured route target not found: ${target.provider}/${target.modelId}. Available providers: ${providers || "none"}`);
   }
@@ -601,10 +629,7 @@ function getInnerModel(target: RouteTarget, context?: Context): Model<Api> {
 }
 
 function getPrimaryModelLimitsFn(route: RouteDefinition): { contextWindow: number; maxTokens: number } {
-  let registryModels: any[] = [];
-  try {
-    registryModels = latestUiContext?.modelRegistry?.getAvailable?.() ?? [];
-  } catch { /* registry may be unavailable during startup */ }
+  const registryModels: any[] = getAvailableModels();
 
   return getPrimaryModelLimits(route, (provider, modelId) => {
     try {
@@ -706,7 +731,7 @@ async function tryTarget(
   target: RouteTarget,
   context: Context,
   options: SimpleStreamOptions | undefined,
-  routingScope: { sessionId?: string; requestId: string },
+  routingScope: { sessionId?: string; requestId: string; isActive?: () => boolean },
   onAttempt?: () => void,
 ): Promise<TargetAttemptResult> {
   // Recheck at the transport boundary: candidate lists may be stale after
@@ -747,7 +772,7 @@ async function tryTargetOnce(
   target: RouteTarget,
   context: Context,
   options: SimpleStreamOptions | undefined,
-  routingScope: { sessionId?: string; requestId: string },
+  routingScope: { sessionId?: string; requestId: string; isActive?: () => boolean },
   isCurrentAttempt: () => boolean,
 ): Promise<TargetAttemptResult> {
   const coolDown = (message: string) => {
@@ -788,7 +813,9 @@ async function tryTargetOnce(
     flushed = true;
   };
 
-  cacheOptimizerRouting.publish(outerModel.id, target, "trying", { ...routingScope, api: innerModel.api });
+  if (routingScope.isActive?.() !== false) {
+    cacheOptimizerRouting.publish(outerModel.id, target, "trying", { ...routingScope, api: innerModel.api });
+  }
   const sanitized = sanitizeContext(context, target.provider, target.modelId, innerModel.api);
   // Respect route output limits without exceeding the selected model's own limit.
   const routeDef = routesCache[outerModel.id];
@@ -1194,7 +1221,7 @@ function emitRouterEvent<T extends Record<string, unknown>>(
     requestId: ids.requestId,
     conversationId: ids.conversationId,
     routeId: ids.routeId,
-    sessionId: activeSessionId,
+    sessionId: sessions.sessionId(),
     version: 1,
     data,
   });
@@ -1202,6 +1229,9 @@ function emitRouterEvent<T extends Record<string, unknown>>(
 
 function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
   const outer = createAssistantMessageEventStream();
+  // Capture before any await: another session event can change the current context.
+  const sessionId = options?.sessionId ?? sessions.sessionId();
+  const isActive = sessions.captureLiveness(sessionId);
 
   (async () => {
     const routeId = model.id;
@@ -1389,6 +1419,7 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         if (auditedRejections.length > 0) {
           parts.push(`budget exhausted (${auditedRejections.join("; ")})`);
         }
+        parts.push(...collectUnrefreshableOAuthDiagnostics(routeTargets, readAuthFile(AUTH_PATH)));
         const reason = parts.length > 0 ? parts.join(" / ") : "no healthy route targets available";
         outer.push({ type: "error", reason: "error", error: buildCombinedError(model, routeId, [reason]) });
         outer.end();
@@ -1576,11 +1607,13 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         candidates: decision.metadata.candidateTrace ?? [],
       });
 
-      const routingScope = { sessionId: options?.sessionId ?? activeSessionId, requestId };
+      const routingScope = { sessionId, requestId, isActive };
       for (const [attemptIndex, target] of targets.entries()) {
         const t0 = Date.now();
         const result = await tryTarget(outer, model, target, context, options, routingScope, () => {
-          cacheOptimizerRouting.publish(routeId, target, "planned", routingScope);
+          if (isActive?.() !== false) {
+            cacheOptimizerRouting.publish(routeId, target, "planned", routingScope);
+          }
           lastAttemptByRoute.set(routeId, target.label);
           emitRouterEvent("routing.attempt", { requestId, conversationId, routeId }, {
             index: attemptIndex + 1,
@@ -1591,7 +1624,9 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
         });
         if (result.skipped) continue;
         if (result.success) {
-          cacheOptimizerRouting.publish(routeId, target, "success", routingScope);
+          if (isActive?.() !== false) {
+            cacheOptimizerRouting.publish(routeId, target, "success", routingScope);
+          }
           const elapsed = Date.now() - t0;
           const usageMetrics = extractUsageMetrics(result.lastMessage?.usage);
           finalOutcome = "success";
@@ -1710,7 +1745,9 @@ function streamAutoRouter(model: Model<Api>, context: Context, options?: SimpleS
           outer.end();
           return;
         }
-        cacheOptimizerRouting.publish(routeId, target, "failed", routingScope);
+        if (isActive?.() !== false) {
+          cacheOptimizerRouting.publish(routeId, target, "failed", routingScope);
+        }
         if (result.retryableFailure) {
           const elapsed = Date.now() - t0;
           errors.push(result.retryableFailure);
@@ -2061,7 +2098,7 @@ function formatCircuitStatusSegment(): string {
 }
 
 function refreshStatus(routeId?: string) {
-  const ctx = latestUiContext;
+  const ctx = sessions.context();
   if (!ctx) return;
   try {
     const activeModel = ctx.model;
@@ -2171,23 +2208,20 @@ export default function (pi: ExtensionAPI) {
   triggerStartupUviRefresh();
 
   const updateUi = (ctx: any) => {
-    latestUiContext = ctx;
+    sessions.update(ctx);
     loadRoutesConfig();
     refreshStatus();
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    activeSessionId = ctx.sessionManager.getSessionId();
     cacheOptimizerRouting.register();
     updateUi(ctx);
     triggerStartupUviRefresh();
   });
-  pi.on("session_shutdown", async () => {
-    // Session-bound contexts become stale immediately after this hook returns.
-    cacheOptimizerRouting.clearSession(activeSessionId);
-    cacheOptimizerRouting.unregisterAdapter();
-    latestUiContext = undefined;
-    activeSessionId = undefined;
+  pi.on("session_shutdown", async (_event, ctx) => {
+    // A subagent session also sends this event. Remove only the state of the
+    // session that ends. The context becomes stale after this hook returns.
+    sessions.end(ctx);
   });
   pi.on("model_select", async (_event, ctx) => updateUi(ctx));
   pi.on("agent_start", async (_event, ctx) => updateUi(ctx));
@@ -2852,7 +2886,8 @@ export default function (pi: ExtensionAPI) {
       if (subcommand === "reload") {
         rebuildProvider(pi);
         updateUi(ctx);
-        ctx.ui.notify(`Reloaded auto-router config from ${ROUTES_PATH}${configError ? `\nWarning: ${configError}` : ""}`, configError ? "warning" : "info");
+        const warning = getConfigWarning();
+        ctx.ui.notify(`Reloaded auto-router config from ${ROUTES_PATH}${warning ? `\nWarning: ${warning}` : ""}`, warning ? "warning" : "info");
         return;
       }
 
@@ -2862,7 +2897,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify([
           `Active route: ${activeRouteId ?? "none"}`,
           activeRouteId ? getStatusLine(activeRouteId) : "Select an auto-router model via /model to use it.",
-          configError ? `\nWarning: ${configError}` : "",
+          formatConfigWarning("\n"),
           "\nConfigured routes:\n",
           ...routeLines,
           "\nAliases:\n",
@@ -2877,7 +2912,7 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("Usage: /auto-router show <routeId>", "error");
           return;
         }
-        ctx.ui.notify(`${routeSummary(routeId)}${configError ? `\n\nWarning: ${configError}` : ""}`, routesCache[routeId] ? "info" : "error");
+        ctx.ui.notify(`${routeSummary(routeId)}${formatConfigWarning("\n\n")}`, routesCache[routeId] ? "info" : "error");
         return;
       }
 
@@ -2943,7 +2978,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify([
         `Active route: ${activeRouteId ?? "none"}`,
         activeRouteId ? getStatusLine(activeRouteId) : "Select an auto-router model via /model to use it.",
-        configError ? `\nWarning: ${configError}` : "",
+        formatConfigWarning("\n"),
         "",
         "Commands:",
         "/auto-router status",
