@@ -111,10 +111,23 @@ export function parseAbsoluteResetMs(message: any): number | undefined {
   return ms >= 0 ? ms : undefined;
 }
 
+/** Parse Google RetryInfo delays like `"retryDelay": "37823s"` or "Please retry in 12.5s" and return ms. */
+export function parseRetryDelayMs(message: any): number | undefined {
+  const text = String(message ?? "");
+  // retryDelay may appear inside a JSON string, so quotes can be backslash-escaped.
+  const match = text.match(/retryDelay\\*"\s*:\s*\\*"(\d+(?:\.\d+)?)s/i) ?? text.match(/retry in\s+(\d+(?:\.\d+)?)\s*s\b/i);
+  if (!match) return undefined;
+  const seconds = Number(match[1]);
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return Math.ceil(seconds * 1_000);
+}
+
 /** Determine cooldown duration in ms based on the error message content. */
 export function getCooldownMs(message: any): number {
   const explicitResetMs = parseResetAfterMs(message);
   if (explicitResetMs) return explicitResetMs + 5_000;
+  const retryDelayMs = parseRetryDelayMs(message);
+  if (retryDelayMs) return retryDelayMs + 5_000;
   const clockResetMs = parseClockResetMs(message);
   if (clockResetMs) return clockResetMs;
   const absoluteResetMs = parseAbsoluteResetMs(message);

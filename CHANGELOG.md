@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- A Google 429 that carries a RetryInfo `retryDelay` (for example `"retryDelay": "37823s"` when the daily free-tier quota is exhausted) or a "Please retry in Ns" message now cools the target down for that delay. Before, the router used the generic 2-minute 429 cooldown, so it kept retrying the exhausted Gemini target until the quota reset.
+
 ## 0.3.1
 
 **Release date:** 2026-10-22

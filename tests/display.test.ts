@@ -190,6 +190,13 @@ describe("getCooldownMs", () => {
     assert.equal(getCooldownMs("insufficient balance"), 30 * 60_000);
   });
 
+  it("uses Google RetryInfo retryDelay for daily quota 429s", () => {
+    const escaped = String.raw`{"error":{"message":"{\n \"error\": {\n \"code\": 429,\n \"details\": [{\n \"@type\": \"type.googleapis.com/google.rpc.RetryInfo\",\n \"retryDelay\": \"37823s\"\n }]}}","code":429,"status":"Too Many Requests"}}`;
+    assert.equal(getCooldownMs(escaped), 37_823_000 + 5_000);
+    assert.equal(getCooldownMs(`429 {"retryDelay": "12.5s"}`), 12_500 + 5_000);
+    assert.equal(getCooldownMs("429 Quota exceeded. Please retry in 40.2s."), 40_200 + 5_000);
+  });
+
   it("uses explicit reset-after when available", () => {
     const ms = getCooldownMs("rate limit hit, reset after 30 seconds");
     assert.equal(ms, 30_000 + 5_000);
